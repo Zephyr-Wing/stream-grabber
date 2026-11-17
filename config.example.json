@@ -13,9 +13,12 @@
   "proxy": "auto",
   "download_via_proxy": false,
 
-  "_browser_comment": "专用浏览器配置目录，留空 = 仓库下的 .chrome-profile。cookies 存在这里，登录一次长期有效。",
+  "_browser_comment": "以下三项给命令行嗅探用。日常用插件的话可以不管。",
   "browser_profile": "",
   "cdp_port": 9222,
+
+  "_server_comment": "插件连的本地端口。改了之后 extension/popup.js 里的 API 常量要跟着改。",
+  "server_port": 8765,
 
   "_referer_comment": "防盗链映射：CDN 域名 -> 来源页候选列表。留空则只做通用猜测。",
   "referer_map": {}

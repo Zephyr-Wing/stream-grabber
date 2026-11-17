@@ -1,0 +1,26 @@
+{
+  "manifest_version": 3,
+  "name": "stream-grabber",
+  "version": "1.0.0",
+  "description": "把当前页面的播放地址和登录态交给本地下载器，一键拿最高画质",
+  "minimum_chrome_version": "110",
+  "permissions": ["storage", "tabs", "cookies", "scripting", "webRequest"],
+  "host_permissions": ["<all_urls>", "http://127.0.0.1/*", "http://localhost/*"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "stream-grabber",
+    "default_icon": {
+      "16": "icons/16.png",
+      "48": "icons/48.png",
+      "128": "icons/128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/16.png",
+    "48": "icons/48.png",
+    "128": "icons/128.png"
+  }
+}

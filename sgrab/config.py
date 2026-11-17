@@ -20,6 +20,7 @@ DEFAULTS = {
     "download_via_proxy": False,
     "cdp_port": 9222,
     "browser_profile": "",
+    "server_port": 8765,
     "referer_map": {},
 }
 

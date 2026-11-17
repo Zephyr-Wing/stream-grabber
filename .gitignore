@@ -12,6 +12,7 @@ downloads/
 
 # 运行期临时文件
 .sniff_profile/
+.tmp/
 __pycache__/
 *.pyc
 config.json
