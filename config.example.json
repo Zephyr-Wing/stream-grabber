@@ -13,6 +13,10 @@
   "proxy": "auto",
   "download_via_proxy": false,
 
+  "_browser_comment": "专用浏览器配置目录，留空 = 仓库下的 .chrome-profile。cookies 存在这里，登录一次长期有效。",
+  "browser_profile": "",
+  "cdp_port": 9222,
+
   "_referer_comment": "防盗链映射：CDN 域名 -> 来源页候选列表。留空则只做通用猜测。",
   "referer_map": {}
 }

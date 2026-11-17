@@ -11,6 +11,7 @@
     python grab.py <页面地址> --list          # 只解析地址，不下载
 """
 import argparse
+import atexit
 import datetime
 import os
 import re
@@ -85,8 +86,27 @@ def probe_extractor(yt, url, proxy, cfg, jar=None):
     return True, out.splitlines()[0].strip()
 
 
-def main():
-    C.setup_console()
+def _expand_argv(argv):
+    """把粘在同一行里的「地址 --参数」拆开。
+
+    grab.bat 的交互输入整行是一个参数，用户很自然会在地址后面直接跟
+    --cdp-port 9222。不拆的话它会被当成地址的一部分，打开一个坏链接。
+    """
+    out = []
+    for a in argv:
+        a = (a or "").strip()
+        if not a:
+            continue
+        if len(a) > 1 and a[0] in "\"'" and a[-1] == a[0]:
+            a = a[1:-1].strip()
+        if "://" in a and " " in a:
+            out.extend(x for x in a.split() if x)
+        elif a:
+            out.append(a)
+    return out
+
+
+def build_parser():
     ap = argparse.ArgumentParser(
         prog="grab.py",
         description="抓取网页视频：HLS 页面用浏览器嗅探，非 HLS 页面回落到 yt-dlp 解析器。",
@@ -107,12 +127,38 @@ def main():
                     help="嗅探不到 m3u8 时不要回落到 yt-dlp 站点解析器")
     ap.add_argument("--cookies", default="", metavar="BROWSER",
                     help="让 yt-dlp 读浏览器的 cookie 库，如 chrome / edge（要求该浏览器已关闭）")
-    ap.add_argument("--login", action="store_true",
-                    help="用你日常的浏览器配置去嗅探，画质按账号来（要求浏览器已关闭）")
+    ap.add_argument("--guest", action="store_true",
+                    help="用一次性配置，不带任何登录态（默认用专用配置）")
+    ap.add_argument("--login", action="store_true", help=argparse.SUPPRESS)
     ap.add_argument("--cdp-port", type=int, default=0, metavar="PORT",
                     help="连一个已开着调试端口的浏览器，不用关它，例如 9222")
     ap.add_argument("--list", action="store_true", help="只解析播放地址，不下载")
-    args = ap.parse_args()
+    return ap
+
+
+def main():
+    C.setup_console()
+    ap = build_parser()
+
+    argv = _expand_argv(sys.argv[1:])
+    args = ap.parse_args(argv)
+
+    url = (args.url or "").strip().strip('"').strip("'")
+    if not url:
+        print("粘贴视频页面地址或 m3u8 链接，回车开始：")
+        print("（一般直接回车就行；要带参数就写在地址后面，比如 ... --list）")
+        try:
+            line = input("> ").strip()
+        except (EOFError, KeyboardInterrupt):
+            return 2
+        if not line:
+            return 2
+        args = ap.parse_args(_expand_argv(argv + [line]))
+        url = (args.url or "").strip().strip('"').strip("'")
+
+    if not re.match(r"https?://", url, re.I):
+        print("链接需要以 http:// 或 https:// 开头")
+        return 2
 
     cfg = C.load(args.config or None)
     if args.out:
@@ -130,38 +176,24 @@ def main():
         return 2
     ff = C.find_ffmpeg(cfg)
 
-    url = (args.url or "").strip().strip('"').strip("'")
-    if not url:
-        print("粘贴视频页面地址或 m3u8 链接，回车开始：")
-        try:
-            url = input("> ").strip().strip('"').strip("'")
-        except (EOFError, KeyboardInterrupt):
-            return 2
-        if not url:
-            return 2
-    if not re.match(r"https?://", url, re.I):
-        print("链接需要以 http:// 或 https:// 开头")
-        return 2
+    # 登录态：默认就用专用配置，不问、也不要求你关浏览器。
+    #   一、已经开着调试端口（专用浏览器没关）—— 附着过去，省一次启动
+    #   二、否则用专用配置启动一份，登录过的站，登录态还在里面
+    #   三、--guest 才用一次性配置，什么登录态都不带
+    is_page = ".m3u8" not in url.lower()
+    profile_dir = None
 
-    # 画质由登录态决定，所以先问一句，别让人下完才发现是 480p
-    if (not args.login and not args.cdp_port and not args.list
-            and ".m3u8" not in url.lower() and sys.stdin.isatty()):
-        print()
-        print("要不要带你自己的登录态？登着账号画质更高，未登录常常只有 480p。")
-        print("选 y 的代价：得先关掉浏览器（要用它的配置）。[y/N]")
-        try:
-            ans = input("> ").strip().lower()
-        except (EOFError, KeyboardInterrupt):
-            ans = ""
-        if ans in ("y", "yes", "是"):
-            args.login = True
-
-    if args.login and S.browser_running():
-        print()
-        print("浏览器还开着，没法用它的配置再起一个实例。两个办法：")
-        print("  1) 关掉浏览器，重跑一次")
-        print("  2) 不关，改用 --cdp-port 连一个带调试端口的浏览器（见 README）")
-        return 3
+    if is_page and not args.cdp_port:
+        p = C.find_debug_port(cfg.get("cdp_port") or 9222)
+        if p:
+            args.cdp_port = p
+            print("[登录态] 连上已开的调试浏览器（端口 %d）" % p)
+        elif args.guest:
+            print("[登录态] 访客模式，不带登录信息")
+        else:
+            profile_dir = C.profile_dir(cfg)
+            print("[登录态] 专用浏览器配置：%s" % profile_dir)
+            print("        （第一次用、或者画质偏低：先双击 chrome-debug.bat 登录一次）")
 
     proxy = None if args.no_proxy else (
         args.proxy or C.resolve_proxy(cfg))
@@ -189,15 +221,18 @@ def main():
             return 1
     else:
         print("这是网页地址，启动浏览器解析播放地址…")
-        # 只有走登录态时才值得导出 cookie；访客会话导出来对下载没帮助
+        # 有登录态才值得导出 cookie；访客会话导出来对下载没帮助
         jar_path = None
-        if args.login or args.cdp_port:
+        if args.cdp_port or profile_dir:
             fd, jar_path = tempfile.mkstemp(prefix="sgrab_cookies_", suffix=".txt")
             os.close(fd)
             os.remove(jar_path)   # 交给 sniffer 自己创建
+            # 里面是登录凭据，正常路径会删掉；中途异常或被 Ctrl+C 断掉时
+            # 也靠这个兜底，别把它留在临时目录里
+            atexit.register(_drop, jar_path)
         target, ref, jar = S.resolve(
             url, proxy=proxy,
-            profile=("default" if args.login else None),
+            user_data_dir=profile_dir,
             cdp_port=(args.cdp_port or None),
             cookie_jar=jar_path)
 

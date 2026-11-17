@@ -97,51 +97,18 @@ def find_browser():
     return None
 
 
-def _user_data_dirs():
-    """常见浏览器的「用户数据」根目录，按优先级排。"""
-    out = []
-    if sys.platform.startswith("win"):
-        la = os.environ.get("LOCALAPPDATA", "")
-        if la:
-            out.append(os.path.join(la, "Google", "Chrome", "User Data"))
-            out.append(os.path.join(la, "Microsoft", "Edge", "User Data"))
-    elif sys.platform == "darwin":
-        h = os.path.expanduser("~")
-        out.append(os.path.join(h, "Library", "Application Support", "Google", "Chrome"))
-        out.append(os.path.join(h, "Library", "Application Support", "Microsoft Edge"))
-    else:
-        h = os.path.expanduser("~")
-        out.append(os.path.join(h, ".config", "google-chrome"))
-        out.append(os.path.join(h, ".config", "microsoft-edge"))
-    return [d for d in out if os.path.isdir(d)]
+def browser_running(exe=None):
+    """日常浏览器是否开着。开着就没法用它的配置启动第二个实例。
 
-
-def real_profile():
-    """找日常用的那份配置，返回 (user_data_dir, 配置名)。
-
-    配置名不是硬编码 Default —— 多数人装过第二个浏览器会叫 Profile 1，
-    真正在用的那个记在 Local State 的 profile.last_used 里。
+    exe 给了就只查这一支（chrome.exe / msedge.exe），否则任意一个都算。
+    Edge 经常常驻后台，不分青红皂白地判，Chrome 明明关着也会被当成开着。
     """
-    for udd in _user_data_dirs():
-        name = "Default"
-        try:
-            with open(os.path.join(udd, "Local State"), "r", encoding="utf-8") as f:
-                last = (json.load(f).get("profile") or {}).get("last_used")
-            if last and os.path.isdir(os.path.join(udd, last)):
-                name = last
-        except Exception:
-            pass
-        if os.path.isdir(os.path.join(udd, name)):
-            return udd, name
-    return None, None
-
-
-def browser_running():
-    """日常浏览器是否开着。开着就没法用它的配置启动第二个实例。"""
     try:
         if sys.platform.startswith("win"):
             out = subprocess.run(["tasklist"], capture_output=True).stdout.decode(
                 "mbcs", "ignore").lower()
+            if exe:
+                return os.path.basename(exe).lower() in out
             return ("chrome.exe" in out) or ("msedge.exe" in out)
         names = ["Google Chrome", "chrome", "msedge", "chromium"]
         for n in names:
@@ -229,12 +196,13 @@ def write_cookie_jar(cookies, path):
 
 
 def resolve(page_url, proxy=None, max_wait=55, log=print,
-            profile=None, cdp_port=None, cookie_jar=None):
+            user_data_dir=None, cdp_port=None, cookie_jar=None):
     """解析页面里的 m3u8。
 
-    profile   : None 用临时配置；"default" 复用日常配置（要求浏览器已关闭）
-    cdp_port  : 连一个已经开着调试端口的浏览器，不新起进程
-    cookie_jar: 给了路径就把登录态写进去，供下载阶段使用
+    user_data_dir : 专用配置目录。给了就用它启动，登录态写在里面长期保留；
+                    Chrome 157 起不允许在默认配置上开调试端口，所以只能这样。
+    cdp_port      : 连一个已经开着调试端口的浏览器，不新起进程
+    cookie_jar    : 给了路径就把登录态写进去，供下载阶段使用
 
     返回 (m3u8, referer, cookie文件)；失败返回 (None, None, None)。
     """
@@ -276,20 +244,15 @@ def resolve(page_url, proxy=None, max_wait=55, log=print,
             return None, None, None
 
         extra = []
-        if profile == "default":
-            udd, pname = real_profile()
-            if not udd:
-                log("找不到日常浏览器的配置目录，改用临时配置（不会有登录态）。")
-                profile_dir = tempfile.mkdtemp(prefix="sgrab_profile_")
-            else:
-                if browser_running():
-                    log("你的浏览器正在运行，没法用它的配置再起一个实例。")
-                    log("  办法一：先关掉浏览器，再跑一次")
-                    log("  办法二：不关，用 --cdp-port 连一个带调试端口的实例")
-                    return None, None, None
-                profile_dir = udd
-                extra = ["--profile-directory=" + pname]
-                log("使用你日常的浏览器配置（%s / %s），画质按账号来" % (udd, pname))
+        persistent = bool(user_data_dir)
+        if persistent:
+            profile_dir = user_data_dir
+            try:
+                os.makedirs(profile_dir, exist_ok=True)
+            except OSError as e:
+                log("建不了专用配置目录 %s：%s" % (profile_dir, e))
+                return None, None, None
+            log("专用浏览器配置：%s" % profile_dir)
         else:
             profile_dir = tempfile.mkdtemp(prefix="sgrab_profile_")
 
@@ -329,7 +292,7 @@ def resolve(page_url, proxy=None, max_wait=55, log=print,
         if not ws_url:
             log("连不上浏览器调试端口，可能被安全软件拦截。")
             _kill(proc)
-            if profile != "default":
+            if not persistent:
                 shutil.rmtree(profile_dir, ignore_errors=True)
             return None, None, None
 
@@ -420,7 +383,7 @@ def resolve(page_url, proxy=None, max_wait=55, log=print,
     else:
         _kill(proc)
         time.sleep(0.8)
-        if profile != "default":
+        if not persistent:
             shutil.rmtree(profile_dir, ignore_errors=True)
 
     if hits:

@@ -24,3 +24,5 @@ demo/raw.*
 .idea/
 .DS_Store
 Thumbs.db
+
+.chrome-profile/

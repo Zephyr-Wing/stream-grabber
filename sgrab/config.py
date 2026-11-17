@@ -4,6 +4,7 @@ import json
 import os
 import socket
 import sys
+import urllib.request
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 EXE = ".exe" if os.name == "nt" else ""
@@ -17,6 +18,8 @@ DEFAULTS = {
     "socket_timeout": 20,
     "proxy": "auto",
     "download_via_proxy": False,
+    "cdp_port": 9222,
+    "browser_profile": "",
     "referer_map": {},
 }
 
@@ -58,6 +61,44 @@ def port_open(port, host="127.0.0.1", timeout=0.35):
         return False
     finally:
         s.close()
+
+
+def profile_dir(cfg):
+    """专用浏览器配置目录。
+
+    Chrome 从 157 起不允许在默认配置目录上开 DevTools 端口
+    （会直接拒绝并打印 "requires a non-default data directory"），
+    所以不能借用你日常那个配置，只能用一份独立的、登录一次就长期有效的。
+    默认放在仓库下的 .chrome-profile，和 chrome-debug.bat 指向同一个目录。
+    """
+    p = (cfg or {}).get("browser_profile") or ""
+    if p:
+        return _abs(p)
+    return os.path.join(ROOT, ".chrome-profile")
+
+
+def find_debug_port(preferred=9222, extra=(9223, 9333, 9224)):
+    """找一个已经开着 DevTools 端口的浏览器，返回端口号，没有则 None。
+
+    只探端口通不通不够 —— 7897 也通，但那是代理。再问一句 /json/version，
+    对面回的是 Chromium 才算数。
+    """
+    cands = []
+    for p in (preferred,) + tuple(extra):
+        if p and int(p) not in cands:
+            cands.append(int(p))
+    for p in cands:
+        if not port_open(p):
+            continue
+        try:
+            url = "http://127.0.0.1:%d/json/version" % p
+            with urllib.request.urlopen(url, timeout=1.5) as r:
+                d = json.loads(r.read().decode("utf-8", "replace") or "{}")
+            if d.get("webSocketDebuggerUrl") or "Browser" in d:
+                return p
+        except Exception:
+            continue
+    return None
 
 
 def detect_proxy():
