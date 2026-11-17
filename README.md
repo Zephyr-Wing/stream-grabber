@@ -1,16 +1,26 @@
 # stream-grabber
 
-**把网页里的 HLS 视频抓下来。**
+**把网页里的视频抓下来。**
 
 一个命令行小工具：给它一个视频页面地址（或一条 m3u8 直链），它会自动拿到真实的播放列表、绕过防盗链、多线程下载，最终产出一个能直接播放的 mp4。
 
-> A small CLI that extracts and downloads HLS videos from pages protected by  
-> anti-leech checks and browser challenges. It uses a real browser to sniff the  
-> playlist, then hands the transfer to yt-dlp for concurrent, resumable downloads.
+两条路线，自动选：
 
-![浏览器扩展只抓到贴片广告，本工具按分片数量找到正片](demo/hero.gif)
+| 页面用什么拉流 | 这个工具怎么做 |
+| --- | --- |
+| **HLS / m3u8** | 起一个真实浏览器嗅探播放地址，再交给 yt-dlp 搬 |
+| **DASH / mpd**（B 站、多数大站） | 嗅探不到 m3u8 时自动回落到 yt-dlp 的站点解析器，选 H.264 + AAC 合并成 mp4 |
 
-*左：浏览器扩展看到的，三条贴片；右：本工具看到的，1758 个分片的正片。差别只在一件事——数分片。*
+所以它不是「只认 m3u8」，而是「m3u8 走自己的路，其余交给 yt-dlp」。
+
+> A small CLI for grabbing web video. For HLS pages it sniffs the playlist with a
+> real browser and hands the transfer to yt-dlp for concurrent, resumable
+> downloads. For DASH pages (where no m3u8 exists) it falls back to yt-dlp's site
+> extractors, so one command covers both.
+
+![贴片广告与正片并存时，浏览器扩展只抓到广告，本工具按分片数量找到正片](demo/hero.gif)
+
+*左：浏览器扩展在「贴片与正片并存」的站上看到的，三条贴片；右：本工具看到的，1758 个分片的正片。差别只在一件事——数分片。扩展并不是抓不到 m3u8，是它按 URL 后缀列给你看，而贴片和正片在两条不同的 CDN 上。*
 
 ---
 
@@ -37,6 +47,7 @@
 - 两种输入都支持：**页面地址** 或 **m3u8 直链**
 - 自动探测防盗链 **Referer**，无需手动填
 - 自动嗅探播放地址：按「分片数量」区分正片与贴片广告，正片通常上千分片，广告只有几十
+- **嗅探不到 m3u8 时自动回落**到 yt-dlp 的站点解析器（DASH / mpd 页面，如 B 站）
 - 默认 **16 线程**并发，可调
 - **断点续传**：中断后重跑同一条命令即可继续
 - 支持 **AES-128 加密**的 HLS
@@ -106,6 +117,8 @@ macOS / Linux 用 `./grab.sh`，行为一样。
 | `--proxy`       | 解析页面用的代理     |
 | `--no-proxy`    | 解析页面时不走代理    |
 | `--via-proxy`   | 下载也走代理       |
+| `--cookies`     | 从浏览器读登录态，如 `chrome`、`edge`（下 4K、会员内容用） |
+| `--no-fallback` | 嗅探不到 m3u8 就停下，不要回落到 yt-dlp |
 | `-c, --config`  | 指定配置文件       |
 
 ### 三、六条命令
@@ -136,26 +149,31 @@ python grab.py <地址> --via-proxy
 
 ## 能下哪些站
 
-判断标准就两条：**播放器最终用 HLS（m3u8）拉流**，并且**没有 DRM**。两条都满足的站点，基本都能下。
+先说清楚它到底是什么：**一个 HLS 下载器，外加一个 yt-dlp 兜底**。所以「能不能下」要分两问。
 
-实测可用：
+怎么自己判断一个站走哪条路：打开开发者工具 → 网络面板 → 过滤框输入 `m3u8`。有，走路线一；只有 `.mpd` / `.m4s`，走路线二。
 
-| 站点类型                   | 情况                             |
-| ---------------------- | ------------------------------ |
-| B 站普通 UP 主投稿           | 可用                             |
+### 路线一：HLS（m3u8）
+
+条件只有两条：播放器用 m3u8 拉流、没有 DRM。两条都满足就一定能下，**与站点大小无关，也不限于某几个站**。
+
+| 站点类型 | 情况 |
+| --- | --- |
 | 自建 CDN 的影视聚合站（各种「盗版站」） | 可用。这类站没有官方 API，正是浏览器插件最容易翻车的地方 |
-| 部分成人站点（如 missav、jable） | 可用                             |
-| 各类独立小站、图床式视频站          | 只要是 m3u8 拉流就行                  |
+| 部分成人站点（如 missav、jable） | 可用 |
+| 各类独立小站、图床式视频站 | 只要是 m3u8 拉流就行 |
 
-明确不支持：
+### 路线二：不是 HLS 的（DASH / mpd）
 
-| 站点类型                                | 原因                                           |
-| ----------------------------------- | -------------------------------------------- |
-| B 站番剧 / 影视等版权内容                     | 需大会员鉴权，且有 DRM                                |
-| 抖音网页版                               | DASH 分片 + 强签名（a_bogus / x-bogus），抓到的地址几分钟即失效 |
-| 腾讯视频 / 爱奇艺 / 优酷 / Netflix / Disney+ | 全走 Widevine / PlayReady DRM，分片是密文，密钥不在客户端    |
-| 直播（m3u8 直播 / flv）                   | 只处理点播 VOD，直播未适配                              |
-| YouTube                             | 不是不能下，是没必要——直接用 yt-dlp 本体，它有官方 extractor     |
+嗅探不到 m3u8 时，工具会自动改用 yt-dlp 的站点解析器。这时能不能下，取决于 yt-dlp 有没有这个站的 extractor。
+
+| 站点 | 情况 |
+| --- | --- |
+| **B 站（bilibili）** | **能下**。页面走 DASH，没有一条 m3u8，所以必须走这条路线。默认选 1080P H.264 + AAC 合并成 mp4；4K 与高码率要登录态，加 `--cookies chrome` |
+| YouTube、X、Vimeo 等 | 能下，但没必要绕这一圈，直接 yt-dlp 本体更快 |
+| 抖音网页版 | 不能。DASH 分片带强签名（a_bogus / x-bogus），抓到的地址几分钟即失效 |
+| 腾讯视频 / 爱奇艺 / 优酷 / Netflix / Disney+ | 不能。全走 Widevine / PlayReady DRM，分片是密文，密钥不在客户端 |
+| 直播（m3u8 直播 / flv） | 不处理。只做点播 VOD |
 
 ---
 
@@ -169,9 +187,9 @@ python grab.py <地址> --via-proxy
 | **lux / annie**、**you-get**         | 单文件、启动快                                 | 站点列表靠人工维护，小众站覆盖不到；you-get 更新已放缓                                       |
 | **N_m3u8DL-RE**                     | HLS / DASH 下载质量高，参数最全                   | 得先自己拿到 m3u8 地址；.NET 的 TLS 指纹会被部分 CDN 拦成 403                           |
 | **浏览器扩展**（猫抓、VideoDownloadHelper 等） | 零门槛，装完就能点                               | 分片串行下载、拿不到 key 和 Referer，**经常只识别出贴片广告**                               |
-| **本工具**                             | 「找地址」交给真实浏览器，「下载」交给 yt-dlp              | 没有 extractor 生态，站点改版就要重新嗅探；依赖 Python                                  |
+| **本工具**                             | 一条命令自动分流：m3u8 走浏览器嗅探，非 m3u8 转 yt-dlp 解析器 | 嗅探器只认 m3u8，DASH 完全靠回退；依赖 Python 和浏览器                                  |
 
-最省事的用法：**先用 yt-dlp 本体，它报 `Unsupported URL` 或 403 时，再用本工具。**
+定位说直白些：**它不是 yt-dlp 的替代品，是「不用每次判断该用哪个」的那层壳。** 你不想记哪个站要 sniff、哪个站直接喂 yt-dlp，就丢给它。
 
 ---
 
@@ -180,17 +198,20 @@ python grab.py <地址> --via-proxy
 ```
 页面地址
    │
-   ├─ 启动 Chrome（独立 profile，开启 DevTools 端口）
+   ├─ 启动 Chrome（独立 profile，自动挑空闲 DevTools 端口）
    │      │
    │      ├─ 监听 Network.requestWillBeSent，收集所有 .m3u8
    │      ├─ 循环执行 JS：让所有 <video> 播放、点掉覆盖层播放按钮
    │      └─ 对每条候选播放列表数 #EXTINF 个数
    │             └─ 分片最多的那条 = 正片
    │
-   ├─ 拿到播放列表后，试探 Referer
-   │      └─ 裸请求 → 配置映射 → 站点根域 → 带 www → CDN 自身
-   │
-   └─ yt-dlp：16 线程拉分片 → AES-128 解密 → ffmpeg 封装 mp4
+   ├─ 有 m3u8 吗？
+   │     │
+   │     ├─ 有 ─→ 试探 Referer（裸请求 → 配置映射 → 站点根域 → 带 www → CDN 自身）
+   │     │           └─ yt-dlp：16 线程拉分片 → AES-128 解密 → ffmpeg 封装 mp4
+   │     │
+   │     └─ 没有（DASH / mpd 页面）
+   │           └─ 交给 yt-dlp 站点解析器 → 选 H.264 1080P + AAC → ffmpeg 合并 mp4
 ```
 
 几个实现上的取舍：
@@ -256,9 +277,10 @@ cp config.example.json config.json
 
 **页面解析失败，捕获不到播放列表**
 
-1. 站点是否需要代理才能打开？加 `--proxy`；
-2. 视频是否需要点击才加载？本工具会自动点 `<video>` 和常见播放按钮，但个别播放器需要手动交互；
-3. 换 `--proxy` 无效果时，试着先开代理再运行。
+1. 先看它有没有自动回落到 yt-dlp。回落成功会打印「认出来了：《标题》」，直接下载；
+2. 两条路都失败时，多半是站点要登录 —— 加 `--cookies chrome`（先关掉 Chrome，否则 cookie 库被锁）；
+3. 站点是否需要代理才能打开？加 `--proxy`；
+4. 视频是否需要点击才加载？本工具会自动点 `<video>` 和常见播放按钮，但个别播放器需要手动交互。
 
 **速度慢**
 
@@ -276,9 +298,9 @@ cp config.example.json config.json
 
 ## 已知限制
 
-- 只处理 **HLS (m3u8)** 以及能直连的 mp4，DASH (mpd) 未做专门适配（yt-dlp 原生支持的站点除外）；
-- 嗅探依赖浏览器窗口，运行时会短暂弹出一个窗口（约 20-40 秒）；
-- 单码率播放列表无法「升级画质」——源站给什么就只能拿什么；
+- 嗅探器只认 **m3u8**。DASH（mpd）页面它什么也看不到，走的是 yt-dlp 解析器回退 —— 所以 DASH 站能不能下，本质上取决于 yt-dlp 有没有那个站的 extractor；
+- 嗅探依赖浏览器窗口，运行时会短暂弹出一个窗口（约 20-40 秒）。走回退路线时这 20-40 秒也省不掉，因为要先确认页面上确实没有 m3u8；
+- 单码率播放列表无法「升级画质」—— 源站给什么就只能拿什么；
 - 目标站点改版可能导致嗅探失效，属于预期内的维护成本。
 
 ---

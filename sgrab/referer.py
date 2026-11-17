@@ -18,8 +18,20 @@ def host_of(url):
     return m.group(1).lower() if m else ""
 
 
+# 二级后缀：这些情况下根域要取三段，否则 com.cn / co.uk 会被当成站点主体
+TWO_LEVEL_TLD = {
+    "com.cn", "net.cn", "org.cn", "gov.cn", "edu.cn", "ac.cn",
+    "co.uk", "org.uk", "ac.uk", "gov.uk", "me.uk",
+    "co.jp", "or.jp", "ne.jp", "ac.jp",
+    "com.tw", "com.hk", "com.mo", "com.sg", "com.au", "com.br",
+    "co.kr", "co.nz", "co.za", "co.in", "com.my", "com.tr",
+}
+
+
 def root_of(host):
     parts = host.split(".")
+    if len(parts) >= 3 and ".".join(parts[-2:]) in TWO_LEVEL_TLD:
+        return ".".join(parts[-3:])
     if len(parts) >= 2:
         return ".".join(parts[-2:])
     return host

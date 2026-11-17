@@ -15,6 +15,7 @@ import os
 import re
 import shutil
 import signal
+import socket
 import subprocess
 import sys
 import tempfile
@@ -23,6 +24,25 @@ import urllib.request
 
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
+
+
+def free_port(preferred=9339):
+    """挑一个没被占用的调试端口。9339 常被你自己的 Chrome 或旧进程占着。"""
+    for p in [preferred] + list(range(9340, 9360)):
+        s = socket.socket()
+        try:
+            s.bind(("127.0.0.1", p))
+            return p
+        except OSError:
+            continue
+        finally:
+            s.close()
+    s = socket.socket()
+    try:
+        s.bind(("127.0.0.1", 0))
+        return s.getsockname()[1]
+    finally:
+        s.close()
 
 
 def find_browser():
@@ -119,7 +139,7 @@ def resolve(page_url, proxy=None, max_wait=55, log=print):
 
     referer = origin_of(page_url)
     profile = tempfile.mkdtemp(prefix="sgrab_profile_")
-    port = 9339
+    port = free_port()
 
     args = [browser,
             "--user-data-dir=" + profile,

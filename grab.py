@@ -1,6 +1,10 @@
 # -*- coding: utf-8 -*-
 """stream-grabber 命令行入口。
 
+两条路线：
+  1) 页面用 HLS（m3u8）—— 真实浏览器嗅探播放地址，再交给 yt-dlp 多线程搬
+  2) 页面不用 HLS（DASH / mpd，如 B 站）—— 嗅探不到时自动回落到 yt-dlp 的站点解析器
+
 用法示例：
     python grab.py https://example.com/videos/abc/
     python grab.py https://cdn.example.com/hls/xxx.m3u8 -n my_video
@@ -16,6 +20,9 @@ import sys
 from sgrab import config as C
 from sgrab import referer as R
 from sgrab import sniffer as S
+
+# 优先 H.264：AV1 / HEVC 在部分播放器和剪辑软件里不认
+FMT_PREF = "bv*[vcodec^=avc1]+ba/bv*+ba/b"
 
 
 def safe_name(s, fallback="video"):
@@ -36,11 +43,41 @@ def name_from_url(u):
     return ""
 
 
+def _decode(b):
+    """子进程输出在 Windows 上可能是 GBK 也可能是 UTF-8，两种都试。"""
+    for enc in ("utf-8", "mbcs", "gbk"):
+        try:
+            return b.decode(enc)
+        except (UnicodeDecodeError, LookupError):
+            continue
+    return b.decode("utf-8", "replace")
+
+
+def probe_extractor(yt, url, proxy, cfg):
+    """问 yt-dlp：这个站你认识吗？认得就返回 (True, 标题)。"""
+    cmd = [yt, url,
+           "--simulate", "--no-playlist", "--no-warnings",
+           "--socket-timeout", str(cfg["socket_timeout"]),
+           "--print", "%(title)s"]
+    if proxy:
+        cmd += ["--proxy", proxy]
+    env = dict(os.environ, PYTHONIOENCODING="utf-8")
+    try:
+        p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                           env=env)
+    except Exception:
+        return False, ""
+    out = _decode(p.stdout).strip()
+    if p.returncode != 0 or not out:
+        return False, ""
+    return True, out.splitlines()[0].strip()
+
+
 def main():
     C.setup_console()
     ap = argparse.ArgumentParser(
         prog="grab.py",
-        description="抓取网页里的 HLS 视频：自动过防盗链、自动嗅探播放地址。",
+        description="抓取网页视频：HLS 页面用浏览器嗅探，非 HLS 页面回落到 yt-dlp 解析器。",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=("例子:\n"
                 "  python grab.py https://example.com/videos/abc/\n"
@@ -54,6 +91,10 @@ def main():
     ap.add_argument("--proxy", default=None, help="页面解析用的代理，如 http://127.0.0.1:7897")
     ap.add_argument("--no-proxy", action="store_true", help="解析页面时不走代理")
     ap.add_argument("--via-proxy", action="store_true", help="下载也走代理（默认直连）")
+    ap.add_argument("--no-fallback", action="store_true",
+                    help="嗅探不到 m3u8 时不要回落到 yt-dlp 站点解析器")
+    ap.add_argument("--cookies", default="", metavar="BROWSER",
+                    help="从浏览器读登录态，如 chrome / edge（下 4K、会员内容用）")
     ap.add_argument("--list", action="store_true", help="只解析播放地址，不下载")
     args = ap.parse_args()
 
@@ -93,6 +134,9 @@ def main():
     print("输入：%s" % url[:110])
 
     target, ref = url, None
+    page_mode = False       # True = 把整个页面交给 yt-dlp 的解析器
+    title = ""
+
     if ".m3u8" in url.lower():
         ref = R.find(url, cfg.get("referer_map"))
         if ref is None:
@@ -105,20 +149,38 @@ def main():
     else:
         print("这是网页地址，启动浏览器解析播放地址…")
         target, ref = S.resolve(url, proxy=proxy)
+
         if not target:
             print()
-            print("没解析出播放地址。检查：")
-            print("  1) 站点是否需要代理才能打开（试试 --proxy 或先开代理）")
-            print("  2) 页面上是否真的有视频")
-            return 1
-        print()
-        print("播放地址：%s" % target[:100])
+            print("页面上没有 m3u8 流 —— 这个站多半不用 HLS（B 站、爱奇艺这类走 DASH/mpd），")
+            print("嗅探器按 m3u8 过滤，所以看不见。")
+            if args.no_fallback:
+                return 1
+            print()
+            print("改用 yt-dlp 的站点解析器直接试…")
+            ok, title = probe_extractor(yt, url, proxy, cfg)
+            if not ok:
+                print()
+                print("yt-dlp 也不认识这个站。可能原因：")
+                print("  1) 站点需要登录（试试 --cookies chrome）")
+                print("  2) 页面真的没有视频，或视频已被删除")
+                print("  3) 站点太新或太小，两边都还没支持")
+                return 1
+            print("认出来了：《%s》" % title[:60])
+            target, ref = url, None
+            page_mode = True
+        else:
+            print()
+            print("播放地址：%s" % target[:100])
 
-    name = safe_name(args.name or name_from_url(url) or name_from_url(target))
+    name = safe_name(args.name
+                     or name_from_url(url)
+                     or (title if page_mode else name_from_url(target)))
 
     if args.list:
         print()
         print("名称  : %s" % name)
+        print("路线  : %s" % ("yt-dlp 站点解析器（非 HLS）" if page_mode else "浏览器嗅探 m3u8"))
         print("地址  : %s" % target)
         print("Referer: %s" % (ref or "(不需要)"))
         return 0
@@ -131,23 +193,42 @@ def main():
         extra += ["--ffmpeg-location", ff]
     if cfg.get("download_via_proxy") and proxy:
         extra += ["--proxy", proxy]
+    if args.cookies:
+        extra += ["--cookies-from-browser", args.cookies]
 
-    cmd = [yt, target,
-           "--referer", ref or ("https://" + R.host_of(target) + "/"),
-           "--user-agent", S.UA,
-           "-N", str(cfg["threads"]),
-           "--retries", str(cfg["retries"]),
-           "--fragment-retries", str(cfg["fragment_retries"]),
-           "--socket-timeout", str(cfg["socket_timeout"]),
-           "--no-warnings",
-           "-o", out_tmpl] + extra
+    if page_mode:
+        # 整页交给解析器时不要硬塞 Referer / UA，某些站的鉴权会因此坏掉
+        cmd = [yt, target,
+               "-f", FMT_PREF,
+               "--merge-output-format", "mp4",
+               "--no-playlist",
+               "--retries", str(cfg["retries"]),
+               "--socket-timeout", str(cfg["socket_timeout"]),
+               "--no-warnings",
+               "-o", out_tmpl] + extra
+    else:
+        # Referer 只在拿得到主机名时传，避免拼出非法的 https:///
+        h = R.host_of(target)
+        ref_url = ref or ("https://" + h + "/" if h else "")
+        cmd = [yt, target]
+        if ref_url:
+            cmd += ["--referer", ref_url]
+        cmd += ["--user-agent", S.UA,
+                "-N", str(cfg["threads"]),
+                "--retries", str(cfg["retries"]),
+                "--fragment-retries", str(cfg["fragment_retries"]),
+                "--socket-timeout", str(cfg["socket_timeout"]),
+                "--no-warnings",
+                "-o", out_tmpl] + extra
 
     print("=" * 60)
     print("保存到：%s" % os.path.normpath(os.path.join(out_dir, name + ".mp4")))
-    print("%d 线程下载；中断后重跑同一链接会自动续传" % cfg["threads"])
+    if page_mode:
+        print("使用 yt-dlp 站点解析器；音视频分离时会自动合并为 mp4")
+    else:
+        print("%d 线程下载；中断后重跑同一链接会自动续传" % cfg["threads"])
     print("=" * 60)
     print()
-    sys.stdout.flush()
 
     try:
         rc = subprocess.call(cmd)
@@ -159,7 +240,8 @@ def main():
     print()
     done = []
     for f in os.listdir(out_dir):
-        if not f.startswith(name):
+        stem = os.path.splitext(f)[0]
+        if stem != name and not f.startswith(name + "."):
             continue
         if ".part" in f or ".ytdl" in f:
             continue
