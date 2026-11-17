@@ -1,5 +1,5 @@
 {
-  "_comment": "复制为 config.json 后按需修改。所有路径支持相对路径（相对本文件所在目录）。",
+  "_comment": "复制为 config.json 后按需修改。相对路径以仓库根目录为准。",
 
   "tools_dir": "tools",
   "out_dir": "downloads",
