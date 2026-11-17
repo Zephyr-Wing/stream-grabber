@@ -39,8 +39,6 @@
 - 自动识别本地代理（Clash / v2ray / Shadowsocks 常见端口）
 - Windows / macOS / Linux
 
-实测参考：同一线路下，浏览器内下载约 0.06 MB/s，本工具约 8 MB/s。
-
 ---
 
 ## 环境要求
@@ -81,40 +79,91 @@ pip install yt-dlp
 
 ## 使用
 
-```bash
-# 1) 给页面地址，自动嗅探
-python grab.py https://example.com/videos/abc/
+### 一、最省事：双击 `grab.bat`
 
-# 2) 给 m3u8 直链
-python grab.py https://cdn.example.com/hls/xxxx/index.m3u8
+Windows 上双击仓库根目录的 `grab.bat`，窗口会让你粘贴链接，回车就开始。下载完成后文件在 `downloads/` 目录，终端最后会打印完整路径和体积。
 
-# 3) 指定文件名和目录
-python grab.py <地址> -n demo -o ./downloaded
+macOS / Linux 用 `./grab.sh`，行为一样。
 
-# 4) 只解析地址，不下载（想先看看抓到哪条流）
-python grab.py <地址> --list
+### 二、常用参数
 
-# 5) 页面需要代理才能打开
-python grab.py <地址> --proxy http://127.0.0.1:7897
-
-# 6) 下载也走代理（默认是直连，通常更快）
-python grab.py <地址> --via-proxy
-```
-
-Windows 上直接双击 `grab.bat`，会提示粘贴链接。
-
-常用参数：
+不想每次粘贴完再改设置，就记住这几个：
 
 | 参数 | 说明 |
 | --- | --- |
 | `-n, --name` | 保存文件名（不含扩展名） |
 | `-o, --out` | 保存目录 |
 | `-t, --threads` | 并发分片数，默认 16 |
-| `--list` | 只解析，不下载 |
+| `--list` | 只解析地址，不下载 |
 | `--proxy` | 解析页面用的代理 |
 | `--no-proxy` | 解析页面时不走代理 |
 | `--via-proxy` | 下载也走代理 |
 | `-c, --config` | 指定配置文件 |
+
+### 三、六条命令
+
+需要批量、脚本化，或者想精确控制的时候用命令行：
+
+```bash
+# 1) 给页面地址，自动嗅探播放地址
+python grab.py https://example.com/videos/abc/
+
+# 2) 给 m3u8 直链，跳过嗅探
+python grab.py https://cdn.example.com/hls/xxxx/index.m3u8
+
+# 3) 指定文件名和保存目录
+python grab.py <地址> -n demo -o ./downloaded
+
+# 4) 只解析地址不下载（先确认抓到的是正片还是广告）
+python grab.py <地址> --list
+
+# 5) 页面需要代理才能打开（境外站点常见）
+python grab.py <地址> --proxy http://127.0.0.1:7897
+
+# 6) 下载阶段也走代理（默认直连，通常更快）
+python grab.py <地址> --via-proxy
+```
+
+---
+
+## 能下哪些站
+
+判断标准只有一条：**播放器最终用 HLS（m3u8）拉流，并且没有 DRM**。两条都满足的站点，基本都能下。
+
+实测可用：
+
+| 站点类型 | 情况 |
+| --- | --- |
+| B 站普通 UP 主投稿 | 可用 |
+| 自建 CDN 的影视聚合站（各种"盗版站"） | 可用。这类站没有官方 API，正是浏览器插件最容易翻车的地方 |
+| 部分成人站点（如 missav、jable） | 可用 |
+| 各类独立小站、图床式视频站 | 只要是 m3u8 拉流就行 |
+
+明确不支持：
+
+| 站点类型 | 原因 |
+| --- | --- |
+| B 站番剧 / 影视等版权内容 | 需大会员鉴权，且有 DRM |
+| 抖音网页版 | DASH 分片 + 强签名（a_bogus / x-bogus），抓到的地址几分钟即失效 |
+| 腾讯视频 / 爱奇艺 / 优酷 / Netflix / Disney+ | 全走 Widevine / PlayReady DRM，分片是密文，密钥不在客户端 |
+| 直播（m3u8 直播 / flv） | 只处理点播 VOD，直播未适配 |
+| YouTube | 不是不能下，是没必要——直接用 yt-dlp 本体，它有官方 extractor |
+
+---
+
+## 和同类工具的关系
+
+不重复造轮子，各管一段：
+
+| 工具 | 强在哪 | 弱在哪 |
+| --- | --- | --- |
+| **yt-dlp** | 600+ 站点的 extractor，格式 / 字幕 / 直播全覆盖，更新最勤 | 没人写过 extractor 的站只能走 generic，而 generic 拿不到 JS 动态下发的地址，也过不了 Cloudflare |
+| **lux / annie**、**you-get** | 单文件、启动快 | 站点列表靠人工维护，小众站覆盖不到；you-get 更新已放缓 |
+| **N_m3u8DL-RE** | HLS / DASH 下载质量高，参数最全 | 得先自己拿到 m3u8 地址；.NET 的 TLS 指纹会被部分 CDN 拦成 403 |
+| **浏览器扩展**（猫抓、VideoDownloadHelper 等） | 零门槛，装完就能点 | 分片串行下载、拿不到 key 和 Referer，**经常只识别出贴片广告** |
+| **本工具** | 「找地址」交给真实浏览器，「下载」交给 yt-dlp | 没有 extractor 生态，站点改版就要重新嗅探；依赖 Python |
+
+最省事的用法：**先用 yt-dlp 本体，它报 `Unsupported URL` 或 403 时，再用本工具。**
 
 ---
 
@@ -147,20 +196,37 @@ Windows 上直接双击 `grab.bat`，会提示粘贴链接。
 
 ## 配置
 
+**这个文件是干什么的**：把「每次都要敲的参数」存成文件，双击 `grab.bat` 和命令行都会读它。
+
+**不建也能用。** 所有项都有内置默认值，`config.json` 只负责覆盖默认值。
+
 ```bash
 cp config.example.json config.json
 ```
 
-常用项：
+最常被改的两项：
+
+| 想改什么 | 改哪个键 | 说明 |
+| --- | --- | --- |
+| 视频存到哪个文件夹 | `out_dir` | 默认 `downloads`（仓库根目录下）。建议改成绝对路径，如 `D:/Videos` |
+| 一次拉几个分片 | `threads` | 默认 16。网络差就降到 8，跨境线路可试 24-32 |
+
+完整可配置项：
 
 | 键 | 默认 | 说明 |
 | --- | --- | --- |
-| `tools_dir` | `tools` | yt-dlp / ffmpeg 所在目录 |
+| `tools_dir` | `tools` | yt-dlp / ffmpeg 所在目录，`setup_tools.py` 装到这里 |
 | `out_dir` | `downloads` | 下载保存目录 |
 | `threads` | `16` | 并发分片数 |
+| `retries` | `10` | 整体重试次数 |
+| `fragment_retries` | `30` | 单个分片重试次数 |
+| `socket_timeout` | `20` | 连接超时（秒） |
 | `proxy` | `auto` | `auto` 自动探测；`null` 不用；也可填端口或完整地址 |
 | `download_via_proxy` | `false` | 下载阶段是否也走代理 |
 | `referer_map` | `{}` | 防盗链映射：CDN 域名 → 来源页候选列表 |
+
+> 相对路径是相对**仓库根目录**，不是相对 `config.json` 的位置。改完下次运行即生效，不用重启什么。
+> 优先级：命令行参数 > `config.json` > 内置默认值。
 
 `referer_map` 示例（当 CDN 域名和站点域名完全不同时，自动猜测会失效，需要显式指定）：
 
