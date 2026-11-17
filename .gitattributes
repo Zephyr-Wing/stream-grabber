@@ -1,0 +1,7 @@
+# 统一换行，避免 Windows 上提交的 CRLF 把 Linux 的 .sh 脚本写坏
+* text=auto
+*.sh    text eol=lf
+*.bat   text eol=crlf
+*.py    text eol=lf
+*.md    text eol=lf
+*.json  text eol=lf
