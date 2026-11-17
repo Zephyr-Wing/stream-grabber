@@ -253,6 +253,10 @@ cp config.example.json config.json
 
 命令行跑 `--list`，看 Referer 是不是空的或者猜错了。CDN 和站点不同域时，去 `referer_map` 里补一条。
 
+**页面能看，下载 403 或超时**
+
+网络路径不一致：浏览器走系统代理，下载程序走直连。把 `config.json` 里 `download_via_proxy` 设成 `true`，`proxy` 写你的端口（比如 `7897`）。`auto` 会自动探几个常见端口，探不到就得手写。
+
 **下下来的画质比网页上低**
 
 先确认网页上那个画质是不是真的能播。有些站的清晰度标签是灰的，点了也切不过去。

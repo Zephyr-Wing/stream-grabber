@@ -201,6 +201,7 @@ def build_cmd(cfg, yt, ff, job):
 def run_job(cfg, yt, ff, job):
     job["state"] = "running"
     job["started"] = time.time()
+    print("[任务] %s  开始" % job["name"])
     cmd = build_cmd(cfg, yt, ff, job)
     job["cmd"] = " ".join('"%s"' % c if " " in c else c for c in cmd[:6]) + " …"
     env = dict(os.environ, PYTHONIOENCODING="utf-8")
@@ -258,12 +259,16 @@ def run_job(cfg, yt, ff, job):
         job["files"] = [{"name": f, "size": s,
                          "path": os.path.join(job["out_dir"], f)}
                         for f, s in found]
+        tot = sum(s for _, s in found) / 1048576.0
+        print("[任务] %s  完成  %.1f MB" % (job["name"], tot))
     elif rc in (130, 143, -2, -15):
         job["state"] = "error"
         job["error"] = "已中断"
+        print("[任务] %s  中断" % job["name"])
     else:
         job["state"] = "error"
         job["error"] = "yt-dlp 退出码 %s" % rc
+        print("[任务] %s  失败（退出码 %s）" % (job["name"], rc))
     job["finished"] = time.time()
 
 
