@@ -16,6 +16,9 @@ __pycache__/
 *.pyc
 config.json
 
+# 自己录屏产生的原始素材（体积大，不入库）
+demo/raw.*
+
 # 编辑器
 .vscode/
 .idea/

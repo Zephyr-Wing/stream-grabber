@@ -4,9 +4,13 @@
 
 一个命令行小工具：给它一个视频页面地址（或一条 m3u8 直链），它会自动拿到真实的播放列表、绕过防盗链、多线程下载，最终产出一个能直接播放的 mp4。
 
-> A small CLI that extracts and downloads HLS videos from pages protected by
-> anti-leech checks and browser challenges. It uses a real browser to sniff the
+> A small CLI that extracts and downloads HLS videos from pages protected by  
+> anti-leech checks and browser challenges. It uses a real browser to sniff the  
 > playlist, then hands the transfer to yt-dlp for concurrent, resumable downloads.
+
+![浏览器扩展只抓到贴片广告，本工具按分片数量找到正片](demo/hero.gif)
+
+*左：浏览器扩展看到的，三条贴片；右：本工具看到的，1758 个分片的正片。差别只在一件事——数分片。*
 
 ---
 
@@ -14,10 +18,10 @@
 
 浏览器里的「视频下载」插件，通常有三个绕不过去的硬伤：
 
-| 问题 | 后果 |
-| --- | --- |
-| 在页面里逐段下载，单连接串行 | 高延迟线路上速度极低 |
-| 必须等全部分片到齐才落盘 | 中途一断，进度全废 |
+| 问题                | 后果              |
+| ----------------- | --------------- |
+| 在页面里逐段下载，单连接串行    | 高延迟线路上速度极低      |
+| 必须等全部分片到齐才落盘      | 中途一断，进度全废       |
 | 拿不到加密流的密钥、不带来源页凭据 | 加密流直接失败，或只能抓到广告 |
 
 这个工具把三件事拆开做：
@@ -72,7 +76,7 @@ sudo apt install ffmpeg
 pip install yt-dlp
 ```
 
-> GitHub 直连不稳定时，`setup_tools.py` 会自动切换镜像；也可以手动指定：
+> GitHub 直连不稳定时，`setup_tools.py` 会自动切换镜像；也可以手动指定：  
 > `python setup_tools.py --mirror https://gh-proxy.com/`
 
 ---
@@ -83,22 +87,26 @@ pip install yt-dlp
 
 Windows 上双击仓库根目录的 `grab.bat`，窗口会让你粘贴链接，回车就开始。下载完成后文件在 `downloads/` 目录，终端最后会打印完整路径和体积。
 
+![双击 grab.bat，粘贴链接，自动嗅探并下载](demo/usage.gif)
+
+*示例输出，实际文件名、体积与速度随站点变化。*
+
 macOS / Linux 用 `./grab.sh`，行为一样。
 
 ### 二、常用参数
 
 不想每次粘贴完再改设置，就记住这几个：
 
-| 参数 | 说明 |
-| --- | --- |
-| `-n, --name` | 保存文件名（不含扩展名） |
-| `-o, --out` | 保存目录 |
-| `-t, --threads` | 并发分片数，默认 16 |
-| `--list` | 只解析地址，不下载 |
-| `--proxy` | 解析页面用的代理 |
-| `--no-proxy` | 解析页面时不走代理 |
-| `--via-proxy` | 下载也走代理 |
-| `-c, --config` | 指定配置文件 |
+| 参数              | 说明           |
+| --------------- | ------------ |
+| `-n, --name`    | 保存文件名（不含扩展名） |
+| `-o, --out`     | 保存目录         |
+| `-t, --threads` | 并发分片数，默认 16  |
+| `--list`        | 只解析地址，不下载    |
+| `--proxy`       | 解析页面用的代理     |
+| `--no-proxy`    | 解析页面时不走代理    |
+| `--via-proxy`   | 下载也走代理       |
+| `-c, --config`  | 指定配置文件       |
 
 ### 三、六条命令
 
@@ -132,22 +140,22 @@ python grab.py <地址> --via-proxy
 
 实测可用：
 
-| 站点类型 | 情况 |
-| --- | --- |
-| B 站普通 UP 主投稿 | 可用 |
+| 站点类型                   | 情况                             |
+| ---------------------- | ------------------------------ |
+| B 站普通 UP 主投稿           | 可用                             |
 | 自建 CDN 的影视聚合站（各种「盗版站」） | 可用。这类站没有官方 API，正是浏览器插件最容易翻车的地方 |
-| 部分成人站点（如 missav、jable） | 可用 |
-| 各类独立小站、图床式视频站 | 只要是 m3u8 拉流就行 |
+| 部分成人站点（如 missav、jable） | 可用                             |
+| 各类独立小站、图床式视频站          | 只要是 m3u8 拉流就行                  |
 
 明确不支持：
 
-| 站点类型 | 原因 |
-| --- | --- |
-| B 站番剧 / 影视等版权内容 | 需大会员鉴权，且有 DRM |
-| 抖音网页版 | DASH 分片 + 强签名（a_bogus / x-bogus），抓到的地址几分钟即失效 |
-| 腾讯视频 / 爱奇艺 / 优酷 / Netflix / Disney+ | 全走 Widevine / PlayReady DRM，分片是密文，密钥不在客户端 |
-| 直播（m3u8 直播 / flv） | 只处理点播 VOD，直播未适配 |
-| YouTube | 不是不能下，是没必要——直接用 yt-dlp 本体，它有官方 extractor |
+| 站点类型                                | 原因                                           |
+| ----------------------------------- | -------------------------------------------- |
+| B 站番剧 / 影视等版权内容                     | 需大会员鉴权，且有 DRM                                |
+| 抖音网页版                               | DASH 分片 + 强签名（a_bogus / x-bogus），抓到的地址几分钟即失效 |
+| 腾讯视频 / 爱奇艺 / 优酷 / Netflix / Disney+ | 全走 Widevine / PlayReady DRM，分片是密文，密钥不在客户端    |
+| 直播（m3u8 直播 / flv）                   | 只处理点播 VOD，直播未适配                              |
+| YouTube                             | 不是不能下，是没必要——直接用 yt-dlp 本体，它有官方 extractor     |
 
 ---
 
@@ -155,13 +163,13 @@ python grab.py <地址> --via-proxy
 
 不重复造轮子，各管一段：
 
-| 工具 | 强在哪 | 弱在哪 |
-| --- | --- | --- |
-| **yt-dlp** | 600+ 站点的 extractor，格式 / 字幕 / 直播全覆盖，更新最勤 | 没人写过 extractor 的站只能走 generic，而 generic 拿不到 JS 动态下发的地址，也过不了 Cloudflare |
-| **lux / annie**、**you-get** | 单文件、启动快 | 站点列表靠人工维护，小众站覆盖不到；you-get 更新已放缓 |
-| **N_m3u8DL-RE** | HLS / DASH 下载质量高，参数最全 | 得先自己拿到 m3u8 地址；.NET 的 TLS 指纹会被部分 CDN 拦成 403 |
-| **浏览器扩展**（猫抓、VideoDownloadHelper 等） | 零门槛，装完就能点 | 分片串行下载、拿不到 key 和 Referer，**经常只识别出贴片广告** |
-| **本工具** | 「找地址」交给真实浏览器，「下载」交给 yt-dlp | 没有 extractor 生态，站点改版就要重新嗅探；依赖 Python |
+| 工具                                  | 强在哪                                     | 弱在哪                                                                   |
+| ----------------------------------- | --------------------------------------- | --------------------------------------------------------------------- |
+| **yt-dlp**                          | 600+ 站点的 extractor，格式 / 字幕 / 直播全覆盖，更新最勤 | 没人写过 extractor 的站只能走 generic，而 generic 拿不到 JS 动态下发的地址，也过不了 Cloudflare |
+| **lux / annie**、**you-get**         | 单文件、启动快                                 | 站点列表靠人工维护，小众站覆盖不到；you-get 更新已放缓                                       |
+| **N_m3u8DL-RE**                     | HLS / DASH 下载质量高，参数最全                   | 得先自己拿到 m3u8 地址；.NET 的 TLS 指纹会被部分 CDN 拦成 403                           |
+| **浏览器扩展**（猫抓、VideoDownloadHelper 等） | 零门槛，装完就能点                               | 分片串行下载、拿不到 key 和 Referer，**经常只识别出贴片广告**                               |
+| **本工具**                             | 「找地址」交给真实浏览器，「下载」交给 yt-dlp              | 没有 extractor 生态，站点改版就要重新嗅探；依赖 Python                                  |
 
 最省事的用法：**先用 yt-dlp 本体，它报 `Unsupported URL` 或 403 时，再用本工具。**
 
@@ -206,26 +214,26 @@ cp config.example.json config.json
 
 最常被改的两项：
 
-| 想改什么 | 改哪个键 | 说明 |
-| --- | --- | --- |
+| 想改什么      | 改哪个键      | 说明                                            |
+| --------- | --------- | --------------------------------------------- |
 | 视频存到哪个文件夹 | `out_dir` | 默认 `downloads`（仓库根目录下）。建议改成绝对路径，如 `D:/Videos` |
-| 一次拉几个分片 | `threads` | 默认 16。网络差就降到 8，跨境线路可试 24-32 |
+| 一次拉几个分片   | `threads` | 默认 16。网络差就降到 8，跨境线路可试 24-32                   |
 
 完整可配置项：
 
-| 键 | 默认 | 说明 |
-| --- | --- | --- |
-| `tools_dir` | `tools` | yt-dlp / ffmpeg 所在目录，`setup_tools.py` 装到这里 |
-| `out_dir` | `downloads` | 下载保存目录 |
-| `threads` | `16` | 并发分片数 |
-| `retries` | `10` | 整体重试次数 |
-| `fragment_retries` | `30` | 单个分片重试次数 |
-| `socket_timeout` | `20` | 连接超时（秒） |
-| `proxy` | `auto` | `auto` 自动探测；`null` 不用；也可填端口或完整地址 |
-| `download_via_proxy` | `false` | 下载阶段是否也走代理 |
-| `referer_map` | `{}` | 防盗链映射：CDN 域名 → 来源页候选列表 |
+| 键                    | 默认          | 说明                                         |
+| -------------------- | ----------- | ------------------------------------------ |
+| `tools_dir`          | `tools`     | yt-dlp / ffmpeg 所在目录，`setup_tools.py` 装到这里 |
+| `out_dir`            | `downloads` | 下载保存目录                                     |
+| `threads`            | `16`        | 并发分片数                                      |
+| `retries`            | `10`        | 整体重试次数                                     |
+| `fragment_retries`   | `30`        | 单个分片重试次数                                   |
+| `socket_timeout`     | `20`        | 连接超时（秒）                                    |
+| `proxy`              | `auto`      | `auto` 自动探测；`null` 不用；也可填端口或完整地址           |
+| `download_via_proxy` | `false`     | 下载阶段是否也走代理                                 |
+| `referer_map`        | `{}`        | 防盗链映射：CDN 域名 → 来源页候选列表                     |
 
-> 相对路径是相对**仓库根目录**，不是相对 `config.json` 的位置。改完下次运行即生效，不用重启什么。
+> 相对路径是相对**仓库根目录**，不是相对 `config.json` 的位置。改完下次运行即生效，不用重启什么。  
 > 优先级：命令行参数 > `config.json` > 内置默认值。
 
 `referer_map` 示例（当 CDN 域名和站点域名完全不同时，自动猜测会失效，需要显式指定）：
@@ -243,23 +251,25 @@ cp config.example.json config.json
 
 ## 常见问题
 
-**下载时报 403**
+**下载时报 403**  
 先看 `--list` 输出的 Referer 是否为空或猜错。CDN 与站点不同域时，需要在 `config.json` 的 `referer_map` 里显式指定来源页。
 
 **页面解析失败，捕获不到播放列表**
+
 1. 站点是否需要代理才能打开？加 `--proxy`；
 2. 视频是否需要点击才加载？本工具会自动点 `<video>` 和常见播放按钮，但个别播放器需要手动交互；
 3. 换 `--proxy` 无效果时，试着先开代理再运行。
 
 **速度慢**
+
 1. 确认没开 `--via-proxy`；
 2. 提高 `-t`（如 32），但过多会被 CDN 限流；
 3. 换时段。跨境线路在晚高峰会被严重限速。
 
-**中断了怎么办**
+**中断了怎么办**  
 重跑同一条命令，yt-dlp 会基于 `.part` 文件续传，不会从头再来。
 
-**DRM 加密的能下吗**
+**DRM 加密的能下吗**  
 不能。Widevine / PlayReady 这类 DRM 不在本工具范围内。
 
 ---
@@ -286,6 +296,10 @@ stream-grabber/
 ├── config.example.json
 ├── requirements.txt
 ├── grab.bat / grab.sh
+├── demo/                # README 用的演示动图
+│   ├── hero.gif
+│   ├── usage.gif
+│   └── record.bat       # 想自己录一段真实演示时用（需要 ffmpeg）
 └── tools/               # 运行时生成，不入库
 ```
 
