@@ -16,6 +16,7 @@ import os
 import re
 import subprocess
 import sys
+import tempfile
 
 from sgrab import config as C
 from sgrab import referer as R
@@ -31,6 +32,15 @@ def safe_name(s, fallback="video"):
     if not s:
         s = fallback + "_" + datetime.datetime.now().strftime("%Y%m%d_%H%M")
     return s[:80]
+
+
+def _drop(path):
+    """cookie 文件里是登录凭据，用完立刻删掉，别留在硬盘上。"""
+    if path:
+        try:
+            os.remove(path)
+        except OSError:
+            pass
 
 
 def name_from_url(u):
@@ -53,7 +63,7 @@ def _decode(b):
     return b.decode("utf-8", "replace")
 
 
-def probe_extractor(yt, url, proxy, cfg):
+def probe_extractor(yt, url, proxy, cfg, jar=None):
     """问 yt-dlp：这个站你认识吗？认得就返回 (True, 标题)。"""
     cmd = [yt, url,
            "--simulate", "--no-playlist", "--no-warnings",
@@ -61,6 +71,8 @@ def probe_extractor(yt, url, proxy, cfg):
            "--print", "%(title)s"]
     if proxy:
         cmd += ["--proxy", proxy]
+    if jar:
+        cmd += ["--cookies", jar]
     env = dict(os.environ, PYTHONIOENCODING="utf-8")
     try:
         p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -94,7 +106,11 @@ def main():
     ap.add_argument("--no-fallback", action="store_true",
                     help="嗅探不到 m3u8 时不要回落到 yt-dlp 站点解析器")
     ap.add_argument("--cookies", default="", metavar="BROWSER",
-                    help="从浏览器读登录态，如 chrome / edge（下 4K、会员内容用）")
+                    help="让 yt-dlp 读浏览器的 cookie 库，如 chrome / edge（要求该浏览器已关闭）")
+    ap.add_argument("--login", action="store_true",
+                    help="用你日常的浏览器配置去嗅探，画质按账号来（要求浏览器已关闭）")
+    ap.add_argument("--cdp-port", type=int, default=0, metavar="PORT",
+                    help="连一个已开着调试端口的浏览器，不用关它，例如 9222")
     ap.add_argument("--list", action="store_true", help="只解析播放地址，不下载")
     args = ap.parse_args()
 
@@ -127,6 +143,26 @@ def main():
         print("链接需要以 http:// 或 https:// 开头")
         return 2
 
+    # 画质由登录态决定，所以先问一句，别让人下完才发现是 480p
+    if (not args.login and not args.cdp_port and not args.list
+            and ".m3u8" not in url.lower() and sys.stdin.isatty()):
+        print()
+        print("要不要带你自己的登录态？登着账号画质更高，未登录常常只有 480p。")
+        print("选 y 的代价：得先关掉浏览器（要用它的配置）。[y/N]")
+        try:
+            ans = input("> ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            ans = ""
+        if ans in ("y", "yes", "是"):
+            args.login = True
+
+    if args.login and S.browser_running():
+        print()
+        print("浏览器还开着，没法用它的配置再起一个实例。两个办法：")
+        print("  1) 关掉浏览器，重跑一次")
+        print("  2) 不关，改用 --cdp-port 连一个带调试端口的浏览器（见 README）")
+        return 3
+
     proxy = None if args.no_proxy else (
         args.proxy or C.resolve_proxy(cfg))
 
@@ -136,6 +172,11 @@ def main():
     target, ref = url, None
     page_mode = False       # True = 把整个页面交给 yt-dlp 的解析器
     title = ""
+    jar = None              # 从已登录浏览器导出的 cookie，下载阶段要用
+
+    if args.cookies and S.browser_running():
+        print("[!] --cookies 要读浏览器的 cookie 库，而它现在开着，多半会失败。")
+        print("    想带登录态，用 --login（先关浏览器）或 --cdp-port（不关）。")
 
     if ".m3u8" in url.lower():
         ref = R.find(url, cfg.get("referer_map"))
@@ -148,7 +189,17 @@ def main():
             return 1
     else:
         print("这是网页地址，启动浏览器解析播放地址…")
-        target, ref = S.resolve(url, proxy=proxy)
+        # 只有走登录态时才值得导出 cookie；访客会话导出来对下载没帮助
+        jar_path = None
+        if args.login or args.cdp_port:
+            fd, jar_path = tempfile.mkstemp(prefix="sgrab_cookies_", suffix=".txt")
+            os.close(fd)
+            os.remove(jar_path)   # 交给 sniffer 自己创建
+        target, ref, jar = S.resolve(
+            url, proxy=proxy,
+            profile=("default" if args.login else None),
+            cdp_port=(args.cdp_port or None),
+            cookie_jar=jar_path)
 
         if not target:
             print()
@@ -158,11 +209,11 @@ def main():
                 return 1
             print()
             print("改用 yt-dlp 的站点解析器直接试…")
-            ok, title = probe_extractor(yt, url, proxy, cfg)
+            ok, title = probe_extractor(yt, url, proxy, cfg, jar)
             if not ok:
                 print()
                 print("yt-dlp 也不认识这个站。可能原因：")
-                print("  1) 站点需要登录（试试 --cookies chrome）")
+                print("  1) 站点需要登录（加 --login，或先关浏览器再用 --cookies chrome）")
                 print("  2) 页面真的没有视频，或视频已被删除")
                 print("  3) 站点太新或太小，两边都还没支持")
                 return 1
@@ -183,6 +234,8 @@ def main():
         print("路线  : %s" % ("yt-dlp 站点解析器（非 HLS）" if page_mode else "浏览器嗅探 m3u8"))
         print("地址  : %s" % target)
         print("Referer: %s" % (ref or "(不需要)"))
+        print("登录态: %s" % ("已导出" if jar else "无（访客身份，画质可能被限制）"))
+        _drop(jar)
         return 0
 
     out_dir = C.ensure_out(cfg)
@@ -193,7 +246,9 @@ def main():
         extra += ["--ffmpeg-location", ff]
     if cfg.get("download_via_proxy") and proxy:
         extra += ["--proxy", proxy]
-    if args.cookies:
+    if jar:
+        extra += ["--cookies", jar]
+    elif args.cookies:
         extra += ["--cookies-from-browser", args.cookies]
 
     if page_mode:
@@ -236,6 +291,8 @@ def main():
         print()
         print("已中断。重跑同一条命令即可续传。")
         return 130
+    finally:
+        _drop(jar)
 
     print()
     done = []
