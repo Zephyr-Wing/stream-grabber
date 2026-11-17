@@ -21,6 +21,7 @@ import tempfile
 
 from sgrab import config as C
 from sgrab import referer as R
+from sgrab import route as Route
 from sgrab import sniffer as S
 
 # 优先 H.264：AV1 / HEVC 在部分播放器和剪辑软件里不认
@@ -121,15 +122,14 @@ def build_parser():
     ap.add_argument("-c", "--config", default="", help="指定 config.json")
     ap.add_argument("-t", "--threads", type=int, default=0, help="并发分片数，默认 16")
     ap.add_argument("--proxy", default=None, help="页面解析用的代理，如 http://127.0.0.1:7897")
-    ap.add_argument("--no-proxy", action="store_true", help="解析页面时不走代理")
-    ap.add_argument("--via-proxy", action="store_true", help="下载也走代理（默认直连）")
+    ap.add_argument("--no-proxy", action="store_true", help="解析页面和下载都不走代理")
+    ap.add_argument("--via-proxy", action="store_true", help="下载阶段强制走代理（默认 auto：探测到就用）")
     ap.add_argument("--no-fallback", action="store_true",
                     help="嗅探不到 m3u8 时不要回落到 yt-dlp 站点解析器")
     ap.add_argument("--cookies", default="", metavar="BROWSER",
                     help="让 yt-dlp 读浏览器的 cookie 库，如 chrome / edge（要求该浏览器已关闭）")
     ap.add_argument("--guest", action="store_true",
-                    help="用一次性配置，不带任何登录态（默认用专用配置）")
-    ap.add_argument("--login", action="store_true", help=argparse.SUPPRESS)
+                    help="用一次性配置，不带任何登录态")
     ap.add_argument("--cdp-port", type=int, default=0, metavar="PORT",
                     help="连一个已开着调试端口的浏览器，不用关它，例如 9222")
     ap.add_argument("--list", action="store_true", help="只解析播放地址，不下载")
@@ -167,6 +167,9 @@ def main():
         cfg["threads"] = args.threads
     if args.via_proxy:
         cfg["download_via_proxy"] = True
+    if args.no_proxy:
+        # --no-proxy 是「完全不碰代理」，下载阶段也跟着直连
+        cfg["download_via_proxy"] = False
 
     yt = C.find_ytdlp(cfg)
     if not yt:
@@ -208,16 +211,17 @@ def main():
 
     if args.cookies and S.browser_running():
         print("[!] --cookies 要读浏览器的 cookie 库，而它现在开着，多半会失败。")
-        print("    想带登录态，用 --login（先关浏览器）或 --cdp-port（不关）。")
+        print("    想带登录态，改读已登录的专用配置（默认行为），或用 --cdp-port 附着。")
 
     if ".m3u8" in url.lower():
-        ref = R.find(url, cfg.get("referer_map"))
+        ref = R.find(url, cfg.get("referer_map"), proxy=proxy)
         if ref is None:
             print()
             print("所有候选来源页都被拒绝。常见原因：")
             print("  1) 链接过期 —— 这类地址通常几小时失效，重新抓一条")
             print("  2) 需要登录状态")
             print("  3) CDN 校验了客户端指纹（换用页面地址模式，由浏览器代取）")
+            print("  4) 该 CDN 需要走代理 —— 加 --proxy 指定，或检查 config.json 的 proxy")
             return 1
     else:
         print("这是网页地址，启动浏览器解析播放地址…")
@@ -230,11 +234,23 @@ def main():
             # 里面是登录凭据，正常路径会删掉；中途异常或被 Ctrl+C 断掉时
             # 也靠这个兜底，别把它留在临时目录里
             atexit.register(_drop, jar_path)
-        target, ref, jar = S.resolve(
-            url, proxy=proxy,
-            user_data_dir=profile_dir,
-            cdp_port=(args.cdp_port or None),
-            cookie_jar=jar_path)
+        try:
+            target, ref, jar = S.resolve(
+                url, proxy=proxy,
+                user_data_dir=profile_dir,
+                cdp_port=(args.cdp_port or None),
+                cookie_jar=jar_path)
+        except S.SnifferError as e:
+            # 这类错误重试无用，也不该伪装成「页面没有视频」
+            _drop(jar_path)
+            print()
+            print("[X] 无法解析页面：%s" % e)
+            print()
+            print("检查顺序：")
+            print("  1) 依赖：pip install -r requirements.txt（用运行本脚本的同一个 Python）")
+            print("  2) 浏览器：先双击 chrome-debug.bat 登录一次，再重跑")
+            print("  3) 调试端口：已被占用时用 --cdp-port 指定，或先关掉那个浏览器")
+            return 2
 
         if not target:
             print()
@@ -248,7 +264,7 @@ def main():
             if not ok:
                 print()
                 print("yt-dlp 也不认识这个站。可能原因：")
-                print("  1) 站点需要登录（加 --login，或先关浏览器再用 --cookies chrome）")
+                print("  1) 站点需要登录（先在 chrome-debug.bat 打开的窗口里登录一次，再重跑）")
                 print("  2) 页面真的没有视频，或视频已被删除")
                 print("  3) 站点太新或太小，两边都还没支持")
                 return 1
@@ -264,11 +280,25 @@ def main():
                      or (title if page_mode else name_from_url(target)))
 
     if args.list:
+        route_desc = ("yt-dlp 站点解析器（非 HLS）" if page_mode
+                      else ("m3u8 直链" if not is_page else "浏览器嗅探 m3u8"))
+        mode = C.proxy_mode(cfg)
+        if mode == "off" or not proxy:
+            path = "直连"
+        elif mode == "on":
+            path = "代理 %s" % proxy
+        elif page_mode:
+            path = "代理 %s（失败改直连）" % proxy
+        elif mode == "smart":
+            path = "测速择优（直连 vs 代理 %s）" % proxy
+        else:
+            path = "直连（不通时改代理 %s）" % proxy
         print()
         print("名称  : %s" % name)
-        print("路线  : %s" % ("yt-dlp 站点解析器（非 HLS）" if page_mode else "浏览器嗅探 m3u8"))
+        print("路线  : %s" % route_desc)
         print("地址  : %s" % target)
         print("Referer: %s" % (ref or "(不需要)"))
+        print("下载路径: %s" % path)
         print("登录态: %s" % ("已导出" if jar else "无（访客身份，画质可能被限制）"))
         _drop(jar)
         return 0
@@ -276,43 +306,82 @@ def main():
     out_dir = C.ensure_out(cfg)
     out_tmpl = os.path.join(out_dir, name + ".%(ext)s")
 
-    extra = []
-    if ff:
-        extra += ["--ffmpeg-location", ff]
-    if cfg.get("download_via_proxy") and proxy:
-        extra += ["--proxy", proxy]
-    if jar:
-        extra += ["--cookies", jar]
-    elif args.cookies:
-        extra += ["--cookies-from-browser", args.cookies]
+    # Referer 只在拿得到主机名时传，避免拼出非法的 https:///
+    _h = R.host_of(target)
+    ref_url = ref or ("https://" + _h + "/" if _h else "")
 
-    if page_mode:
-        # 整页交给解析器时不要硬塞 Referer / UA，某些站的鉴权会因此坏掉
-        cmd = [yt, target,
-               "-f", FMT_PREF,
-               "--merge-output-format", "mp4",
-               "--no-playlist",
-               "--retries", str(cfg["retries"]),
-               "--socket-timeout", str(cfg["socket_timeout"]),
-               "--no-warnings",
-               "-o", out_tmpl] + extra
-    else:
-        # Referer 只在拿得到主机名时传，避免拼出非法的 https:///
-        h = R.host_of(target)
-        ref_url = ref or ("https://" + h + "/" if h else "")
-        cmd = [yt, target]
+    common = []
+    if ff:
+        common += ["--ffmpeg-location", ff]
+    if jar:
+        common += ["--cookies", jar]
+    elif args.cookies:
+        common += ["--cookies-from-browser", args.cookies]
+
+    def build_cmd(dl_proxy):
+        extra = list(common)
+        if dl_proxy:
+            extra += ["--proxy", dl_proxy]
+        if page_mode:
+            # 整页交给解析器时不要硬塞 Referer / UA，某些站的鉴权会因此坏掉
+            return [yt, target,
+                    "-f", FMT_PREF,
+                    "--merge-output-format", "mp4",
+                    "--no-playlist",
+                    "--retries", str(cfg["retries"]),
+                    "--socket-timeout", str(cfg["socket_timeout"]),
+                    "--no-warnings",
+                    "-o", out_tmpl] + extra
+        c = [yt, target]
         if ref_url:
-            cmd += ["--referer", ref_url]
-        cmd += ["--user-agent", S.UA,
-                "-N", str(cfg["threads"]),
-                "--retries", str(cfg["retries"]),
-                "--fragment-retries", str(cfg["fragment_retries"]),
-                "--socket-timeout", str(cfg["socket_timeout"]),
-                "--no-warnings",
-                "-o", out_tmpl] + extra
+            c += ["--referer", ref_url]
+        return c + ["--user-agent", S.UA,
+                    "-N", str(cfg["threads"]),
+                    "--retries", str(cfg["retries"]),
+                    "--fragment-retries", str(cfg["fragment_retries"]),
+                    "--socket-timeout", str(cfg["socket_timeout"]),
+                    "--no-warnings",
+                    "-o", out_tmpl] + extra
+
+    def collect():
+        out = []
+        try:
+            names = os.listdir(out_dir)
+        except OSError:
+            return out
+        for f in names:
+            stem = os.path.splitext(f)[0]
+            if stem != name and not f.startswith(name + "."):
+                continue
+            if ".part" in f or ".ytdl" in f:
+                continue
+            p = os.path.join(out_dir, f)
+            if os.path.isfile(p) and os.path.getsize(p) > 10240:
+                out.append((f, os.path.getsize(p)))
+        return out
+
+    # 下载走哪条网络路径
+    mode = C.proxy_mode(cfg)
+    if not proxy:
+        attempts = [None]
+    elif mode == "off":
+        attempts = [None]
+    elif mode == "on":
+        attempts = [proxy, None]
+    elif page_mode:
+        # 整页交给解析器时无法预取分片地址，按「页面多半需要代理」先走代理
+        attempts = [proxy, None]
+    else:
+        use_proxy, _, _ = Route.pick(target, ref_url, S.UA, proxy,
+                                     smart=(mode == "smart"))
+        attempts = [use_proxy, proxy if use_proxy is None else None]
+
+    def route_name(p):
+        return p or "直连"
 
     print("=" * 60)
     print("保存到：%s" % os.path.normpath(os.path.join(out_dir, name + ".mp4")))
+    print("代理    ：%s" % route_name(attempts[0]))
     if page_mode:
         print("使用 yt-dlp 站点解析器；音视频分离时会自动合并为 mp4")
     else:
@@ -320,39 +389,36 @@ def main():
     print("=" * 60)
     print()
 
+    rc = 0
     try:
-        rc = subprocess.call(cmd)
+        for i, use_proxy in enumerate(attempts):
+            if i:
+                print()
+                print("%s 未能完成下载，改用%s重试…"
+                      % (route_name(attempts[0]), route_name(use_proxy)))
+                print()
+            rc = subprocess.call(build_cmd(use_proxy))
+            done = collect()
+            if done:
+                print()
+                print("完成：")
+                for f, size in done:
+                    print("  %s  %.1f MB" % (f, size / 1048576))
+                return 0
+            if rc in (130, 143, -2, -15):
+                print()
+                print("已中断。重跑同一条命令即可从断点续传。")
+                return 130
     except KeyboardInterrupt:
         print()
-        print("已中断。重跑同一条命令即可续传。")
+        print("已中断。重跑同一条命令即可从断点续传。")
         return 130
     finally:
         _drop(jar)
 
     print()
-    done = []
-    for f in os.listdir(out_dir):
-        stem = os.path.splitext(f)[0]
-        if stem != name and not f.startswith(name + "."):
-            continue
-        if ".part" in f or ".ytdl" in f:
-            continue
-        p = os.path.join(out_dir, f)
-        if os.path.isfile(p) and os.path.getsize(p) > 10240:
-            done.append((f, os.path.getsize(p)))
-
-    if done:
-        print("完成：")
-        for f, size in done:
-            print("  %s  %.1f MB" % (f, size / 1048576))
-        return 0
-
-    if rc in (130, 143, -2, -15):
-        print("已中断。重跑同一条命令即可从断点续传。")
-        return 130
-
     print("没有生成文件（yt-dlp 退出码 %s）" % rc)
-    print("把上面的报错发出来，或试试加上 --via-proxy。")
+    print("把上面的报错发出来；海外站点可试 --via-proxy，国内站点可试 --no-proxy。")
     return 1
 
 

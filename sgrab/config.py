@@ -17,7 +17,7 @@ DEFAULTS = {
     "fragment_retries": 30,
     "socket_timeout": 20,
     "proxy": "auto",
-    "download_via_proxy": False,
+    "download_via_proxy": "auto",
     "cdp_port": 9222,
     "browser_profile": "",
     "server_port": 8765,
@@ -122,6 +122,39 @@ def resolve_proxy(cfg):
     if v.isdigit():
         return "http://127.0.0.1:" + v
     return v
+
+
+PROXY_OFF = (False, None, 0, "none", "off", "false", "no")
+PROXY_ON = (True, 1, "true", "on", "yes")
+
+
+def proxy_mode(cfg):
+    """download_via_proxy 的取值：off / on / auto（直连优先）/ smart（测速择优）。"""
+    v = cfg.get("download_via_proxy", "auto")
+    if v in PROXY_OFF:
+        return "off"
+    if v in PROXY_ON:
+        return "on"
+    if str(v).lower() in ("smart", "fastest", "speed"):
+        return "smart"
+    return "auto"
+
+
+def download_proxy(cfg, proxy=None):
+    """强制走代理时返回代理地址，否则 None。
+
+    auto 不在这里决定：要按实测吞吐选路，见 sgrab/route.py。
+    """
+    if proxy_mode(cfg) != "on":
+        return None
+    return proxy or resolve_proxy(cfg)
+
+
+def probe_proxy(cfg):
+    """拉播放列表用的代理。列表只有几百字节，稳妥优先，off 时才强制直连。"""
+    if proxy_mode(cfg) == "off":
+        return None
+    return resolve_proxy(cfg)
 
 
 def _first_file(cands):

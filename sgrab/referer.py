@@ -67,7 +67,18 @@ def _ctx():
     return ctx
 
 
-def probe(url, referer=None, timeout=12):
+def _opener(proxy=None):
+    """proxy 为 None 时显式直连，不读 HTTP_PROXY 环境变量。
+
+    探测和下载必须走同一条网络路径，否则会出现「数得到分片、下载失败」。
+    """
+    handlers = [urllib.request.ProxyHandler(
+        {"http": proxy, "https": proxy} if proxy else {})]
+    handlers.append(urllib.request.HTTPSHandler(context=_ctx()))
+    return urllib.request.build_opener(*handlers)
+
+
+def probe(url, referer=None, timeout=12, proxy=None):
     """返回 (是否为 m3u8, 状态)"""
     req = urllib.request.Request(url)
     req.add_header("User-Agent", UA)
@@ -75,7 +86,7 @@ def probe(url, referer=None, timeout=12):
     if referer:
         req.add_header("Referer", referer)
     try:
-        with urllib.request.urlopen(req, timeout=timeout, context=_ctx()) as r:
+        with _opener(proxy).open(req, timeout=timeout) as r:
             head = r.read(2048)
             return (b"#EXTM3U" in head), r.status
     except urllib.error.HTTPError as e:
@@ -84,15 +95,15 @@ def probe(url, referer=None, timeout=12):
         return False, str(e)[:60]
 
 
-def find(url, extra_map=None, log=print):
+def find(url, extra_map=None, log=print, proxy=None):
     """找到可用 Referer。返回字符串（可能为空串表示不需要）。失败返回 None。"""
-    ok, code = probe(url)
+    ok, code = probe(url, proxy=proxy)
     if ok:
         log("  来源校验：不需要额外 Referer")
         return ""
     log("  直接请求返回 %s，开始尝试来源页…" % code)
     for ref in candidates(url, extra_map):
-        ok, c = probe(url, ref)
+        ok, c = probe(url, ref, proxy=proxy)
         log("    %-38s -> %s" % (ref, "通过" if ok else c))
         if ok:
             return ref

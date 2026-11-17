@@ -163,14 +163,38 @@ def _decode(b):
     return b.decode("utf-8", "replace")
 
 
+def choose_dl_proxy(cfg, job):
+    """下载走直连还是代理。
+
+    auto（默认）直连优先，直连取不到分片才用代理；smart 才两路测速比较。
+    整页模式拿不到分片地址，沿用「先代理」的保守选择。
+    """
+    mode = C.proxy_mode(cfg)
+    proxy = job.get("proxy")
+    if mode == "off" or not proxy:
+        return None
+    if mode == "on":
+        return proxy
+    if job.get("mode") != "hls":
+        return proxy
+    try:
+        from sgrab import route as Route
+        use_proxy, _, _ = Route.pick(
+            job["url"], job.get("referer") or "",
+            job.get("ua") or UA_FALLBACK, proxy, smart=(mode == "smart"))
+        return use_proxy
+    except Exception:
+        return None
+
+
 def build_cmd(cfg, yt, ff, job):
     url = job["url"]
     out_tmpl = os.path.join(job["out_dir"], job["name"] + ".%(ext)s")
     extra = []
     if ff:
         extra += ["--ffmpeg-location", ff]
-    if cfg.get("download_via_proxy") and job.get("proxy"):
-        extra += ["--proxy", job["proxy"]]
+    if job.get("dl_proxy"):
+        extra += ["--proxy", job["dl_proxy"]]
     if job.get("jar"):
         extra += ["--cookies", job["jar"]]
 
@@ -202,6 +226,7 @@ def run_job(cfg, yt, ff, job):
     job["state"] = "running"
     job["started"] = time.time()
     print("[任务] %s  开始" % job["name"])
+    job["dl_proxy"] = choose_dl_proxy(cfg, job)
     cmd = build_cmd(cfg, yt, ff, job)
     job["cmd"] = " ".join('"%s"' % c if " " in c else c for c in cmd[:6]) + " …"
     env = dict(os.environ, PYTHONIOENCODING="utf-8")
@@ -429,8 +454,8 @@ class Handler(BaseHTTPRequestHandler):
             # 并发探：一个页面常常挂着好几条候选，串着拉会把插件的请求拖到超时。
             ua = payload.get("ua") or UA_FALLBACK
             ref = payload.get("referer") or ""
-            # 和下载阶段保持一致：只有配了「下载也走代理」才走
-            proxy = C.resolve_proxy(self.cfg) if self.cfg.get("download_via_proxy") else None
+            # 播放列表只有几百字节，稳妥优先；下载路径单独按实测决定
+            proxy = C.probe_proxy(self.cfg)
             targets = []
             for it in (payload.get("urls") or [])[:20]:
                 u = it.get("url") if isinstance(it, dict) else it

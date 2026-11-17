@@ -31,6 +31,20 @@ UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
 
 
+class SnifferError(Exception):
+    """嗅探所需的前提条件不满足（缺依赖、找不到浏览器、连不上调试端口）。
+
+    这类错误和「页面上确实没有 m3u8」要分开处理：前者重试无用，
+    也不应该回落到 yt-dlp 去掩盖真正的病因。
+    """
+
+
+def _opener(proxy=None):
+    handlers = [urllib.request.ProxyHandler(
+        {"http": proxy, "https": proxy} if proxy else {})]
+    return urllib.request.build_opener(*handlers)
+
+
 def free_port(preferred=9339):
     """挑一个没被占用的调试端口。9339 常被你自己的 Chrome 或旧进程占着。"""
     for p in [preferred] + list(range(9340, 9360)):
@@ -119,14 +133,18 @@ def browser_running(exe=None):
     return False
 
 
-def count_segments(url, referer, timeout=12):
-    """拉播放列表数分片；-1 表示拿不到。"""
+def count_segments(url, referer, timeout=12, proxy=None):
+    """拉播放列表数分片；-1 表示拿不到。
+
+    必须和浏览器走同一条网络路径：海外 CDN 直连拉不动时，
+    不传代理会让所有候选都变成 -1，进而误判成「页面没有 m3u8」。
+    """
     req = urllib.request.Request(url)
     req.add_header("User-Agent", UA)
     if referer:
         req.add_header("Referer", referer)
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as r:
+        with _opener(proxy).open(req, timeout=timeout) as r:
             return r.read().decode("utf-8", "ignore").count("#EXTINF")
     except Exception:
         return -1
@@ -209,8 +227,10 @@ def resolve(page_url, proxy=None, max_wait=55, log=print,
     try:
         import websocket
     except ImportError:
-        log("缺少依赖 websocket-client，请执行：pip install -r requirements.txt")
-        return None, None, None
+        raise SnifferError(
+            "缺少依赖 websocket-client。当前解释器：%s\n"
+            "  安装：\"%s\" -m pip install -r requirements.txt"
+            % (sys.executable, sys.executable))
 
     referer = origin_of(page_url)
     proc, profile_dir, tab_id = None, None, None
@@ -221,27 +241,25 @@ def resolve(page_url, proxy=None, max_wait=55, log=print,
         try:
             _http_json("http://127.0.0.1:%d/json/version" % cdp_port)
         except Exception:
-            log("连不上 127.0.0.1:%d 的调试端口。确认浏览器是用 "
+            raise SnifferError(
+                "连不上 127.0.0.1:%d 的调试端口。确认浏览器是用 "
                 "--remote-debugging-port=%d 启动的。" % (cdp_port, cdp_port))
-            return None, None, None
         try:
             tab = _http_json("http://127.0.0.1:%d/json/new?%s"
                              % (cdp_port, urllib.parse.quote(page_url, safe="")),
                              method="PUT")
             ws_url, tab_id = tab.get("webSocketDebuggerUrl"), tab.get("id")
         except Exception as e:
-            log("开新标签页失败：%s" % e)
-            return None, None, None
+            raise SnifferError("在调试端口上开新标签页失败：%s" % e)
         if not ws_url:
-            log("调试端口没返回可用的标签页。")
-            return None, None, None
+            raise SnifferError("调试端口没返回可用的标签页。")
         port = cdp_port
         log("附着到已开的浏览器（端口 %d），沿用它的登录态" % cdp_port)
     else:
         browser = find_browser()
         if not browser:
-            log("没找到 Chrome / Edge。装一个，或用环境变量 SG_BROWSER 指定路径。")
-            return None, None, None
+            raise SnifferError(
+                "没找到 Chrome / Edge。装一个，或用环境变量 SG_BROWSER 指定路径。")
 
         extra = []
         persistent = bool(user_data_dir)
@@ -250,8 +268,7 @@ def resolve(page_url, proxy=None, max_wait=55, log=print,
             try:
                 os.makedirs(profile_dir, exist_ok=True)
             except OSError as e:
-                log("建不了专用配置目录 %s：%s" % (profile_dir, e))
-                return None, None, None
+                raise SnifferError("建不了专用配置目录 %s：%s" % (profile_dir, e))
             log("专用浏览器配置：%s" % profile_dir)
         else:
             profile_dir = tempfile.mkdtemp(prefix="sgrab_profile_")
@@ -294,9 +311,16 @@ def resolve(page_url, proxy=None, max_wait=55, log=print,
             _kill(proc)
             if not persistent:
                 shutil.rmtree(profile_dir, ignore_errors=True)
-            return None, None, None
+            raise SnifferError("浏览器已启动但调试端口没有响应，可能被杀毒软件拦截。")
 
-    ws = websocket.create_connection(ws_url, timeout=20)
+    try:
+        ws = websocket.create_connection(ws_url, timeout=20)
+    except Exception as e:
+        if not attached:
+            _kill(proc)
+            if not persistent:
+                shutil.rmtree(profile_dir, ignore_errors=True)
+        raise SnifferError("连接浏览器调试通道失败：%s" % e)
     mid = [0]
     hits = []
 
@@ -350,11 +374,17 @@ def resolve(page_url, proxy=None, max_wait=55, log=print,
             last_click = time.time()
             call("Runtime.evaluate", {"expression": play_js, "returnByValue": True}, timeout=4)
             for u in hits:
-                n = count_segments(u, referer)
+                n = count_segments(u, referer, proxy=proxy)
                 if n > best_n:
                     best_n, best = n, u
             if best_n > 300:  # 已经是正片规模，不用再等
                 break
+
+    # 数不出分片（拉不到播放列表）时不要丢掉已捕获的地址：
+    # 交给 yt-dlp 再试一次，比直接报「没有 m3u8」有用
+    if best is None and hits:
+        best = hits[0]
+        log("分片数拿不到，先取第一条候选地址")
 
     # 顺手把登录态导出来，下载阶段要用同一份 cookie 才能拿到同样的画质
     jar = None
@@ -389,6 +419,8 @@ def resolve(page_url, proxy=None, max_wait=55, log=print,
     if hits:
         log("捕获到 %d 条播放列表：" % len(hits))
         for u in hits:
-            n = count_segments(u, referer)
-            log("  %5s 分片  %s%s" % (n, u[:88], "  <- 选中" if u == best else ""))
+            n = count_segments(u, referer, proxy=proxy)
+            # 0 分片通常是 master 列表，真正的内容在它下面那一层
+            label = "master" if n == 0 else ("%5s" % n)
+            log("  %6s 分片  %s%s" % (label, u[:88], "  <- 选中" if u == best else ""))
     return best, referer, jar
