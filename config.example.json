@@ -1,26 +1,15 @@
 {
-  "_comment": "复制为 config.json 后按需修改。相对路径以仓库根目录为准。",
-
-  "tools_dir": "tools",
   "out_dir": "downloads",
-
+  "tools_dir": "tools",
   "threads": 16,
   "retries": 10,
   "fragment_retries": 30,
   "socket_timeout": 20,
-
-  "_proxy_comment": "auto = 自动探测本机代理；null = 不使用代理；填端口号或 http://host:port 强制指定",
   "proxy": "auto",
-  "_download_proxy_comment": "视频分片走哪条路：auto = 直连优先，直连不通才用代理；smart = 两路各测一小段取快的；true = 强制代理；false = 始终直连",
-  "download_via_proxy": "auto",
-
-  "_browser_comment": "以下三项给命令行嗅探用。日常用插件的话可以不管。",
-  "browser_profile": "",
-  "cdp_port": 9222,
-
-  "_server_comment": "插件连的本地端口。改了之后 extension/popup.js 里的 API 常量要跟着改。",
+  "route_mode": "auto",
   "server_port": 8765,
-
-  "_referer_comment": "防盗链映射：CDN 域名 -> 来源页候选列表。留空则只做通用猜测。",
-  "referer_map": {}
+  "format_pref": "bv*[vcodec^=avc1]+ba/bv*+ba/b",
+  "_comment": "复制为 config.json 后按需修改。相对路径以仓库根目录为准。",
+  "_proxy_comment": "auto = 自动探测本地代理；null = 不用；也可填 7897 或 http://host:port",
+  "_route_comment": "下载路径：auto = 直连优先、不通才用代理；direct = 只直连；proxy = 只代理"
 }

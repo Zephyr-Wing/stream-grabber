@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<style>
+  * { box-sizing: border-box; }
+  body { width: 400px; margin: 0; font: 12px/1.5 system-ui, "Microsoft YaHei", sans-serif; color: #1a1a1a; background: #fff; }
+  .wrap { padding: 12px; }
+  .head { display: flex; align-items: center; gap: 6px; margin-bottom: 10px; }
+  .dot { width: 7px; height: 7px; border-radius: 50%; background: #c8c8c8; flex: none; }
+  .dot.on { background: #1a7a3a; } .dot.off { background: #c0392b; }
+  .site { font-weight: 600; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .ver { color: #999; font-size: 10px; }
+  .tip { background: #fdf3f2; border: 1px solid #f0cdc9; border-radius: 6px; padding: 8px 10px;
+         margin-bottom: 10px; color: #a03030; font-size: 11.5px; }
+  .hidden { display: none !important; }
+  .sec { display: flex; justify-content: space-between; color: #8a8a8a; font-size: 10.5px;
+         border-bottom: 1px solid #eee; padding-bottom: 4px; margin: 10px 0 6px; }
+  .row { display: flex; align-items: center; gap: 8px; padding: 7px 8px; border: 1px solid #e8e8e8;
+         border-radius: 6px; margin-bottom: 4px; }
+  .row:hover { border-color: #c8d8f0; background: #fafcff; }
+  .badge { flex: none; min-width: 46px; text-align: center; font-size: 10px; font-weight: 700;
+           padding: 2px 5px; border-radius: 4px; background: #eef2f8; color: #4a5a72; }
+  .badge.hd { background: #e6f4ea; color: #1a7a3a; }
+  .seg { flex: none; font-size: 10.5px; color: #6b7a90; }
+  .seg b { color: #1a1a1a; }
+  .host { flex: 1; font-size: 10px; color: #aaa; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  button { font: inherit; cursor: pointer; }
+  .pick { border: none; background: #2a5aa8; color: #fff; width: 24px; height: 24px;
+          border-radius: 5px; font-size: 13px; line-height: 1; flex: none; }
+  .pick:hover { background: #1f4785; }
+  .main { display: block; width: 100%; margin-top: 10px; padding: 9px 11px; text-align: left;
+          border: 1px solid #b8cef0; background: #f6f9ff; border-radius: 7px; color: #1a1a1a; }
+  .main:hover { background: #eef4ff; }
+  .main b { display: block; color: #2a5aa8; font-size: 12.5px; }
+  .main span { display: block; color: #6b7a90; font-size: 10.5px; margin-top: 2px; }
+  .empty { border: 1px dashed #ddd; border-radius: 6px; color: #999; padding: 14px 10px;
+           text-align: center; font-size: 11px; line-height: 1.7; white-space: pre-line; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="head">
+    <span class="dot" id="dot"></span>
+    <span class="site" id="site">读取页面…</span>
+    <span class="ver" id="ver"></span>
+  </div>
+
+  <div class="tip hidden" id="offline">
+    本地服务没开。运行仓库里的 <b>server.bat</b>，窗口留着别关。
+  </div>
+
+  <div class="sec"><span>页面上抓到的流</span><span id="count"></span></div>
+  <div id="list"><div class="empty">正在扫描…</div></div>
+
+  <button class="main" id="panel">
+    <b>打开下载面板</b>
+    <span>在这里改文件名、目录、档位、并发，然后开始</span>
+  </button>
+</div>
+<script src="popup.js"></script>
+</body>
+</html>
