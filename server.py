@@ -179,6 +179,9 @@ def choose_dl_proxy(cfg, job):
         return proxy
     try:
         from sgrab import route as Route
+        # 签名链接多半绑定了取址时的出口 IP，先走同一条路
+        if Route.is_signed(job["url"]):
+            return proxy
         use_proxy, _, _ = Route.pick(
             job["url"], job.get("referer") or "",
             job.get("ua") or UA_FALLBACK, proxy, smart=(mode == "smart"))
@@ -292,7 +295,14 @@ def run_job(cfg, yt, ff, job):
         print("[任务] %s  中断" % job["name"])
     else:
         job["state"] = "error"
-        job["error"] = "yt-dlp 退出码 %s" % rc
+        # 复探一次，把 403 翻译成具体原因（签名/IP、Referer、过期…）
+        from sgrab import route as Route
+        code, lines = Route.explain_failure(
+            job["url"], job.get("referer") or "", job.get("dl_proxy"))
+        for line in lines:
+            job["log"].append(line)
+            print("        " + line)
+        job["error"] = lines[0] if lines else ("yt-dlp 退出码 %s" % rc)
         print("[任务] %s  失败（退出码 %s）" % (job["name"], rc))
     job["finished"] = time.time()
 

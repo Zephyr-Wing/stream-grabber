@@ -10,6 +10,7 @@
 """
 import ssl
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -45,6 +46,82 @@ def _fetch(url, proxy, referer, ua, timeout):
     if referer:
         req.add_header("Referer", referer)
     return _opener(proxy).open(req, timeout=timeout)
+
+
+def query_keys(url):
+    try:
+        q = urllib.parse.urlparse(url).query
+        return {k.lower() for k, _ in urllib.parse.parse_qsl(q, keep_blank_values=True)}
+    except Exception:
+        return set()
+
+
+def is_signed(url):
+    """地址是否带时效或来源签名。
+
+    这类链接常把「有效期」和「客户端出口 IP」一起签进去（例如 whip=、sign=），
+    换一条网络路径请求就会被判为签名不符，因此下载路径必须与取址时一致。
+    """
+    keys = query_keys(url)
+    strong = {"sign", "signature", "token", "whip", "auth_key", "key", "expires", "expire"}
+    weak = {"t", "e", "st", "ts", "time", "tsign", "rand", "nonce"}
+    return bool(keys & strong) or len(keys & weak) >= 2
+
+
+def status_of(url, referer="", proxy=None, timeout=8):
+    """探一次地址，返回 (状态码, 响应片段)。连不上时状态码为 None。"""
+    try:
+        with _fetch(url, proxy, referer, UA, timeout) as r:
+            return r.status, ""
+    except urllib.error.HTTPError as e:
+        try:
+            body = e.read(200).decode("utf-8", "ignore").strip()
+        except Exception:
+            body = ""
+        return e.code, body
+    except Exception as e:
+        return None, str(e)[:80]
+
+
+def explain_failure(url, referer="", proxy=None):
+    """下载失败后复探一次地址，把状态码翻译成能照着做的话。
+
+    返回 (状态码, 提示行列表)。
+    """
+    code, body = status_of(url, referer, proxy)
+    low = (body or "").lower()
+    signed = is_signed(url)
+    out = []
+
+    if code is None:
+        out.append("地址连不上：%s" % body)
+        out.append("  检查网络，或换一条路：--via-proxy / --no-proxy")
+        return code, out
+
+    if code in (401, 403):
+        if "sign" in low or signed:
+            out.append("地址返回 %s，签名校验未通过。" % code)
+            out.append("  这类链接把有效期和客户端出口 IP 一起签进了参数，只能从取址时")
+            out.append("  的同一条网络路径访问。浏览器能播、这里下不了，说明两条路出口 IP 不同：")
+            out.append("  常见原因是代理软件按规则分流，把该 CDN 域名走了直连。")
+            out.append("  处理：在代理软件里让该 CDN 域名也走代理，或临时开全局模式，")
+            out.append("        再用 --via-proxy 重跑；也可以把 --list 输出的地址交给浏览器下载。")
+        else:
+            out.append("地址返回 %s，多半是 Referer 不对。" % code)
+            out.append("  用 --list 查看探测到的 Referer；CDN 与站点不同域时，")
+            out.append("  在 config.json 的 referer_map 里登记来源页。")
+        return code, out
+
+    if code == 404:
+        out.append("地址返回 404，链接可能已过期，重新解析一次。")
+        return code, out
+
+    if code == 429:
+        out.append("地址返回 429，被限流了。降低 threads 后重试。")
+        return code, out
+
+    out.append("地址返回 %s。" % code)
+    return code, out
 
 
 def first_segment(playlist_url, proxy, referer="", ua=UA, depth=0):

@@ -119,6 +119,11 @@ function hostOf(u) {
   try { return new URL(u).hostname; } catch (e) { return ""; }
 }
 
+// CDN 校验的通常是站点根域，不是具体页面地址；带完整路径反而可能被拒
+function originOf(u) {
+  try { return new URL(u).origin + "/"; } catch (e) { return u || ""; }
+}
+
 function setStatus(state, text) {
   const dot = $("dot");
   dot.className = "dot " + state;
@@ -234,7 +239,7 @@ async function grab(item, index, btn) {
     const name = pageTitle || hostOf(tab.url);
     const r = await api("/api/grab", {
       url: item.url,
-      referer: tab.url,
+      referer: originOf(tab.url),
       title: name,
       name: index === 0 ? name : name + "_" + (index + 1),
       cookies,

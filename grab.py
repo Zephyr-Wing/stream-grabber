@@ -299,6 +299,8 @@ def main():
         print("地址  : %s" % target)
         print("Referer: %s" % (ref or "(不需要)"))
         print("下载路径: %s" % path)
+        if Route.is_signed(target):
+            print("备注  : 该地址带签名参数，只能从取地址时的同一条网络路径访问")
         print("登录态: %s" % ("已导出" if jar else "无（访客身份，画质可能被限制）"))
         _drop(jar)
         return 0
@@ -371,6 +373,9 @@ def main():
     elif page_mode:
         # 整页交给解析器时无法预取分片地址，按「页面多半需要代理」先走代理
         attempts = [proxy, None]
+    elif Route.is_signed(target):
+        # 签名常把取址时的出口 IP 一并签进去，先走同一条路
+        attempts = [proxy, None]
     else:
         use_proxy, _, _ = Route.pick(target, ref_url, S.UA, proxy,
                                      smart=(mode == "smart"))
@@ -418,7 +423,15 @@ def main():
 
     print()
     print("没有生成文件（yt-dlp 退出码 %s）" % rc)
-    print("把上面的报错发出来；海外站点可试 --via-proxy，国内站点可试 --no-proxy。")
+    # 复探一次地址，把 403 这类含糊的错误翻译成具体原因
+    code, lines = Route.explain_failure(target, ref_url, proxy)
+    if lines:
+        print()
+        for line in lines:
+            print(line)
+    if code != 403:
+        print()
+        print("海外站点可试 --via-proxy，国内站点可试 --no-proxy。")
     return 1
 
 
