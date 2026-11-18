@@ -34,7 +34,7 @@ ERROR_ACTIONS = {
     "E_EXPIRED": "地址已过期：回到页面重新播放几秒，再点一次下载",
     "E_NO_STREAM": "页面上没有可用的视频流：先让播放器加载起来",
     "E_NET": "网络不可达：检查代理与网络后重试",
-    "E_TOOL": "缺少 yt-dlp 或 ffmpeg：运行一次 setup_tools.py",
+    "E_TOOL": "缺少 yt-dlp 或 ffmpeg：放进 tools/ 或系统 PATH 后重启服务",
 }
 
 

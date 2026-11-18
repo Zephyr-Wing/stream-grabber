@@ -49,7 +49,7 @@ def main():
     print(" 保存到  %s" % cfg["out_dir"])
     print(" 并发    %d" % cfg["threads"])
     print(" 路径    %s" % cfg["route_mode"])
-    print(" yt-dlp  %s" % ("OK" if yt else "未找到（运行 setup_tools.py）"))
+    print(" yt-dlp  %s" % ("OK" if yt else "未找到（放进 tools/ 或 PATH）"))
     print(" ffmpeg  %s" % ("OK" if ff else "未找到（音视频分离的站会合并不了）"))
     print()
     print(" 现在去浏览器点扩展图标。窗口保持运行，关掉就用不了了。")
