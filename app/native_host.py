@@ -133,10 +133,16 @@ def start_server(wait=20):
 
 
 def stop_server():
+    # 端口已经没人应答，说明服务本来就没开；顺手清掉可能残留的 pid 文件
+    if not ping():
+        try:
+            os.remove(PID_FILE)
+        except OSError:
+            pass
+        return {"ok": True, "stopped": True, "note": "服务本来就没在运行"}
+
     pid = _pids()
     if not pid:
-        if not ping():
-            return {"ok": True, "stopped": True, "note": "服务本来就没在运行"}
         return {"ok": False, "error": "服务在运行但找不到进程号，请手动关闭"}
 
     try:

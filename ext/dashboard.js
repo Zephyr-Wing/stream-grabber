@@ -1,11 +1,17 @@
 const API = "http://127.0.0.1:8765";
 const HOST = "com.streamgrabber.host";
 const $ = (id) => document.getElementById(id);
+const ACTIVE = new Set(["queued", "resolving", "downloading", "muxing", "fetching"]);
 
-let pending = null;      // popup 传来的候选
-let profile = null;      // 当前地址的机制档案
+let pending = null;       // popup 传来的候选
+let prefillDone = false;  // 候选只填一次，之后重连不再覆盖用户输入
+let profile = null;       // 当前地址的机制档案
 let settings = null;
 let dirTarget = "outDir"; // 目录选择器服务于哪个输入框
+let online = false;
+let busySvc = false;
+let svcMsg = "";          // 启动/停止的说明，重连轮询不要把它冲掉
+let wired = false;
 
 async function api(path, body, method, ms) {
   const ctrl = new AbortController();
@@ -24,6 +30,8 @@ async function api(path, body, method, ms) {
     clearTimeout(timer);
   }
 }
+
+function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
 function fmtRate(bps) {
   if (!bps) return "";
@@ -45,52 +53,173 @@ function stateText(j) {
 
 // ------------------------------------------------------------ 初始化
 
-async function init() {
+async function boot() {
   const got = await chrome.storage.local.get("pending");
   pending = got.pending || null;
-  await chrome.storage.local.remove("pending");
+  wire();
+  await tick(true);
+  setInterval(tick, 2500);                                   // 服务起落都能跟上
+  setInterval(() => { if (online) pollJobs(); }, 1000);
+}
 
-  let info = null;
-  try { info = await api("/v2/ping"); } catch (e) {}
-  if (!info || !info.ok) {
-    $("status").textContent = "本地服务未连接";
-    $("svcBar").classList.remove("hidden");
-    $("start").disabled = true;
-    return;
-  }
-  $("svcBar").classList.add("hidden");
-  $("status").textContent = "服务已连接 · v" + info.version + " · 保存到 " + info.out_dir;
-
-  settings = (await api("/v2/settings")).settings;
-  fillSettings(settings);
-
-  if (pending && pending.items && pending.items.length) {
-    const it = pending.items[0];
-    $("url").value = it.url || "";
-    $("name").value = pending.title || "";
-    $("srcHint").textContent = "来自 " + (pending.pageUrl || "");
-    await probe();
-  } else {
-    $("url").value = "";
-  }
-
+function wire() {
+  if (wired) return;
+  wired = true;
   $("start").addEventListener("click", startJob);
   $("probe").addEventListener("click", probe);
   $("browse").addEventListener("click", () => openDirs("outDir"));
   $("sBrowse").addEventListener("click", () => openDirs("sOutDir"));
   $("saveSet").addEventListener("click", saveSettings);
+  $("svcSwitch").addEventListener("click", onSwitch);
   $("dirUp").addEventListener("click", () => loadDirs($("dirPath").dataset.path ? parentOf($("dirPath").dataset.path) : ""));
   $("dirPick").addEventListener("click", pickDir);
   $("modal").addEventListener("click", (e) => { if (e.target.id === "modal") $("modal").classList.remove("on"); });
+}
 
+async function ping(ms) {
+  try {
+    const r = await api("/v2/ping", null, "GET", ms || 2500);
+    return r && r.ok ? r : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+async function tick(force) {
+  const info = await ping();
+  const was = online;
+  online = !!info;
+  if (online) svcMsg = "";
+  paintService(info);
+  if (online && (force || !was)) await onConnected();
+}
+
+function paintService(info) {
+  const sw = $("svcSwitch");
+  sw.classList.toggle("on", online);
+  sw.classList.toggle("busy", busySvc);
+  sw.title = busySvc ? "处理中…" : online ? "点击关闭本地服务" : "点击启动本地服务";
+  $("start").disabled = !online;
+
+  if (online) {
+    $("svcBar").classList.add("hidden");
+    $("svcBar").textContent = "";
+    $("status").textContent = "服务已连接 · v" + (info ? info.version : "") +
+      " · 保存到 " + (info ? info.out_dir : "");
+  } else if (!busySvc) {
+    $("svcBar").classList.remove("hidden");
+    $("svcBar").textContent = svcMsg || "本地服务未启动。点右上角开关启动。";
+    $("status").textContent = "本地服务未启动";
+  }
+}
+
+async function onConnected() {
+  await loadSettings();
+  if (!prefillDone) {
+    prefillDone = true;
+    if (pending && pending.items && pending.items.length) {
+      const it = pending.items[0];
+      $("url").value = it.url || "";
+      $("name").value = pending.title || "";
+      $("srcHint").textContent = "来自 " + (pending.pageUrl || "");
+      await probe();
+    }
+    // 候选已经落到输入框，缓存就不再需要了
+    await chrome.storage.local.remove("pending");
+  }
   pollJobs();
-  setInterval(pollJobs, 1000);
 }
 
 function parentOf(p) {
   const s = String(p).replace(/[\\/]+$/, "");
   const i = Math.max(s.lastIndexOf("\\"), s.lastIndexOf("/"));
   return i > 0 ? s.slice(0, i) : s;
+}
+
+// ------------------------------------------------------------ 服务开关
+
+function nativeCmd(cmd) {
+  return new Promise((resolve) => {
+    try {
+      chrome.runtime.sendNativeMessage(HOST, { cmd }, (res) => {
+        const err = chrome.runtime.lastError;
+        if (err) {
+          resolve({ ok: false, error: err.message });
+          return;
+        }
+        resolve(res || { ok: false, error: "没有返回" });
+      });
+    } catch (e) {
+      resolve({ ok: false, error: String((e && e.message) || e) });
+    }
+  });
+}
+
+async function onSwitch() {
+  if (busySvc) return;
+  if (online) await svcStop();
+  else await svcStart();
+}
+
+async function svcStart() {
+  busySvc = true;
+  svcMsg = "";
+  paintService(null);
+  $("svcBar").classList.remove("hidden");
+  $("svcBar").textContent = "正在启动本地服务…";
+
+  let hostError = null;
+  const host = nativeCmd("start");
+  host.then((r) => { if (!r.ok) hostError = r.error || "未知错误"; });
+
+  const end = Date.now() + 25000;
+  let up = false;
+  while (Date.now() < end) {
+    if (await ping(1200)) { up = true; break; }
+    if (hostError) break;
+    await sleep(400);
+  }
+
+  busySvc = false;
+  if (up) {
+    // 软刷新即可，不整页重载——重载会把刚收到的候选丢掉
+    await tick(true);
+    return;
+  }
+  online = false;
+  const msg = String(hostError || "");
+  svcMsg = msg
+    ? (/not found|not installed|Specified native|找不到/i.test(msg)
+        ? "启动组件未登记：在项目目录双击 install_host.bat，然后重新加载扩展。"
+        : "启动失败：" + msg)
+    : "25 秒内没有响应，查看项目下的 .tmp/server.log";
+  paintService(null);
+}
+
+async function svcStop() {
+  const n = await countActive();
+  if (n && !confirm("还有 " + n + " 个任务在进行，停止服务会中断它们。继续？")) return;
+
+  busySvc = true;
+  svcMsg = "";
+  paintService(null);
+  const r = await nativeCmd("stop");
+  busySvc = false;
+
+  const info = await ping(1500);
+  online = !!info;
+  svcMsg = info ? "已发出停止，但服务仍在响应。稍后再点一次，或手动结束进程。"
+                : (r.ok ? "" : "停止失败：" + (r.error || "未知错误"));
+  paintService(info);
+}
+
+async function countActive() {
+  try {
+    const d = await api("/v2/jobs", null, "GET", 4000);
+    return ((d && d.jobs) || []).filter((j) => ACTIVE.has(j.state)).length;
+  } catch (e) {
+    return 0;
+  }
 }
 
 // ------------------------------------------------------------ 探测
@@ -172,7 +301,7 @@ async function startJob() {
     $("probeOut").textContent = "已加入队列：" + r.job.name;
     pollJobs();
   } finally {
-    setTimeout(() => { $("start").disabled = false; }, 800);
+    setTimeout(() => { $("start").disabled = !online; }, 800);
   }
 }
 
@@ -222,6 +351,7 @@ async function cookiesFor(url) {
 // ------------------------------------------------------------ 任务列表
 
 async function pollJobs() {
+  if (!online) return;
   let d;
   try { d = await api("/v2/jobs"); } catch (e) { return; }
   if (!d || !d.ok) return;
@@ -320,6 +450,16 @@ async function act(id, action) {
 
 // ------------------------------------------------------------ 设置
 
+async function loadSettings() {
+  try {
+    const r = await api("/v2/settings");
+    if (r && r.settings) {
+      settings = r.settings;
+      fillSettings(settings);
+    }
+  } catch (e) {}
+}
+
 function fillSettings(s) {
   $("sOutDir").value = s.out_dir || "";
   $("sThreads").value = s.threads || 16;
@@ -377,55 +517,4 @@ function pickDir() {
   $("modal").classList.remove("on");
 }
 
-// ------------------------------------------------------------ 本地服务控制
-// 扩展没有启动进程的权限，这里通过已登记的宿主程序代劳
-
-function nativeCmd(cmd) {
-  return new Promise((resolve) => {
-    try {
-      chrome.runtime.sendNativeMessage(HOST, { cmd }, (res) => {
-        const err = chrome.runtime.lastError;
-        if (err) {
-          resolve({ ok: false, error: err.message });
-          return;
-        }
-        resolve(res || { ok: false, error: "没有返回" });
-      });
-    } catch (e) {
-      resolve({ ok: false, error: String((e && e.message) || e) });
-    }
-  });
-}
-
-async function svcStart() {
-  const btn = $("svcStart");
-  btn.disabled = true;
-  $("svcHint").textContent = "正在启动…";
-  const r = await nativeCmd("start");
-  if (r.ok) {
-    $("svcHint").textContent = "已启动，正在重连…";
-    setTimeout(() => location.reload(), 900);
-    return;
-  }
-  btn.disabled = false;
-  const msg = String(r.error || "");
-  $("svcHint").textContent = /not found|not installed|Specified native/i.test(msg)
-    ? "启动组件未安装：在项目目录双击 install_host.bat，然后重新加载扩展。"
-    : "启动失败：" + (msg || "未知错误");
-}
-
-async function svcStop() {
-  const r = await nativeCmd("stop");
-  if (r.ok) {
-    $("status").textContent = "本地服务已停止";
-    $("svcBar").classList.remove("hidden");
-    $("start").disabled = true;
-  } else {
-    $("status").textContent = "停止失败：" + (r.error || "未知错误");
-  }
-}
-
-$("svcStart").onclick = svcStart;
-$("svcStop").onclick = svcStop;
-
-init().catch((e) => { $("status").textContent = "出错了：" + String(e.message || e); });
+boot().catch((e) => { $("status").textContent = "出错了：" + String(e.message || e); });

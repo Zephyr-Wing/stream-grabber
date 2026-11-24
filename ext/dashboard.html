@@ -59,15 +59,29 @@
   .pill { display: inline-block; padding: 1px 7px; border-radius: 10px; font-size: 11px;
           background: #eef2f8; color: #4a5a72; margin-left: 6px; }
   .hidden { display: none !important; }
+  .top { display: flex; align-items: center; gap: 12px; }
+  .top h1 { flex: 1; }
+  .switch { width: 40px; height: 22px; border-radius: 11px; border: none; background: #d3d7de;
+            position: relative; padding: 0; flex: none; transition: background .18s; }
+  .switch > i { position: absolute; top: 3px; left: 3px; width: 16px; height: 16px;
+                border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.28);
+                transition: left .18s; }
+  .switch:hover { background: #c6cbd4; }
+  .switch.on { background: var(--green); }
+  .switch.on:hover { background: #15662f; }
+  .switch.on > i { left: 21px; }
+  .switch.busy { opacity: .5; cursor: default; }
+  .note { background: #fff8e6; border: 1px solid #f0e0b8; color: #8a6a1a; border-radius: 8px;
+          padding: 9px 12px; margin: -8px 0 16px; font-size: 12px; }
 </style>
 </head>
 <body>
-  <h1>stream-grabber</h1>
-  <div class="sub" id="status">连接本地服务…</div>
-  <div id="svcBar" class="hidden" style="margin:-10px 0 16px">
-    <button class="primary" id="svcStart">启动本地服务</button>
-    <span class="hint" id="svcHint" style="margin-left:10px"></span>
+  <div class="top">
+    <h1>stream-grabber</h1>
+    <button class="switch" id="svcSwitch" title="本地服务"><i></i></button>
   </div>
+  <div class="sub" id="status">连接本地服务…</div>
+  <div id="svcBar" class="note hidden">本地服务未启动。点右上角开关启动。</div>
 
   <div class="card" id="prepareCard">
     <h2>新建下载 <span id="srcHint"></span></h2>
@@ -128,8 +142,7 @@
       <label>代理地址</label>
       <input type="text" id="sProxy" placeholder="auto 或 http://127.0.0.1:7897">
     </div>
-    <div class="acts"><button class="primary" id="saveSet">保存设置</button>
-      <button id="svcStop">停止本地服务</button></div>
+    <div class="acts"><button class="primary" id="saveSet">保存设置</button></div>
   </div>
 
   <div class="modal" id="modal">

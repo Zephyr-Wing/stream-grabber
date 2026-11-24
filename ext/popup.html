@@ -10,9 +10,22 @@
   .dot { width: 7px; height: 7px; border-radius: 50%; background: #c8c8c8; flex: none; }
   .dot.on { background: #1a7a3a; } .dot.off { background: #c0392b; }
   .site { font-weight: 600; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .ver { color: #999; font-size: 10px; }
+  .ver { color: #999; font-size: 10px; flex: none; }
+  .switch { width: 38px; height: 21px; border-radius: 11px; border: none; background: #d3d7de;
+            position: relative; padding: 0; flex: none; transition: background .18s; }
+  .switch > i { position: absolute; top: 2.5px; left: 2.5px; width: 16px; height: 16px;
+                border-radius: 50%; background: #fff; box-shadow: 0 1px 2px rgba(0,0,0,.28);
+                transition: left .18s; }
+  .switch:hover { background: #c6cbd4; }
+  .switch.on { background: #1a7a3a; }
+  .switch.on:hover { background: #15662f; }
+  .switch.on > i { left: 19.5px; }
+  .switch.busy { opacity: .5; cursor: default; }
+  .note { background: #fff8e6; border: 1px solid #f0e0b8; color: #8a6a1a; border-radius: 6px;
+          padding: 7px 9px; margin-bottom: 9px; font-size: 11px; line-height: 1.55; }
   .tip { background: #fdf3f2; border: 1px solid #f0cdc9; border-radius: 6px; padding: 8px 10px;
          margin-bottom: 10px; color: #a03030; font-size: 11.5px; }
+  #offlineHint:not(:empty) { margin-top: 5px; color: #9a6a66; font-size: 10.5px; line-height: 1.6; }
   .hidden { display: none !important; }
   .sec { display: flex; justify-content: space-between; color: #8a8a8a; font-size: 10.5px;
          border-bottom: 1px solid #eee; padding-bottom: 4px; margin: 10px 0 6px; }
@@ -36,11 +49,6 @@
   .main span { display: block; color: #6b7a90; font-size: 10.5px; margin-top: 2px; }
   .empty { border: 1px dashed #ddd; border-radius: 6px; color: #999; padding: 14px 10px;
            text-align: center; font-size: 11px; line-height: 1.7; white-space: pre-line; }
-  #startSvc { margin-top: 7px; padding: 6px 12px; border: 1px solid #e0b4ae; border-radius: 6px;
-              background: #fff; color: #a03030; font-size: 11.5px; }
-  #startSvc:hover { background: #fff6f5; }
-  #startSvc[disabled] { opacity: .55; cursor: default; }
-  #offlineHint { margin-top: 6px; color: #9a6a66; font-size: 10.5px; line-height: 1.6; }
 </style>
 </head>
 <body>
@@ -49,11 +57,13 @@
     <span class="dot" id="dot"></span>
     <span class="site" id="site">读取页面…</span>
     <span class="ver" id="ver"></span>
+    <button class="switch" id="svcSwitch" title="本地服务"><i></i></button>
   </div>
 
+  <div class="note hidden" id="note"></div>
+
   <div class="tip hidden" id="offline">
-    <div id="offlineText">本地服务没开。</div>
-    <button id="startSvc">启动本地服务</button>
+    <div id="offlineText">本地服务没开。点右上角开关启动。</div>
     <div id="offlineHint"></div>
   </div>
 

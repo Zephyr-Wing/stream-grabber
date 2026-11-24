@@ -1,11 +1,17 @@
 const API = "http://127.0.0.1:8765";
 const HOST = "com.streamgrabber.host";
 const $ = (id) => document.getElementById(id);
+const ACTIVE = new Set(["queued", "resolving", "downloading", "muxing", "fetching"]);
 
 let tab = null;
 let pageTitle = "";
+let pageOk = false;      // 当前标签页是不是可抓取的网页
 let online = false;
 let serverInfo = null;
+let busy = false;        // 开关正在启动/停止
+let refreshing = false;  // 列表正在加载
+let confirmStopAt = 0;   // 有任务在跑时，要求再点一次才停
+let watch = null;        // 离线时等服务上线的轮询
 
 async function api(path, body, ms) {
   const ctrl = new AbortController();
@@ -29,6 +35,8 @@ function hostOf(u) {
 function originOf(u) {
   try { return new URL(u).origin + "/"; } catch (e) { return ""; }
 }
+
+function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
 // 扫描所有框架：播放器常常嵌在 iframe 里，只读顶层会什么都看不到
 async function scanPage(tabId) {
@@ -193,75 +201,6 @@ async function openPanel(item) {
   window.close();
 }
 
-async function init() {
-  const [t] = await chrome.tabs.query({ active: true, currentWindow: true });
-  tab = t;
-  if (!tab || !tab.url) { setStatus("off", "拿不到当前页面"); return; }
-  pageTitle = tab.title || "";
-
-  if (!/^https?:/i.test(tab.url)) {
-    setStatus("off", "浏览器内部页面，没有东西可抓");
-    $("list").innerHTML = '<div class="empty">换一个有视频的网页再点插件</div>';
-    return;
-  }
-  setStatus("", hostOf(tab.url));
-
-  try {
-    serverInfo = await api("/v2/ping");
-    online = !!(serverInfo && serverInfo.ok);
-  } catch (e) {
-    online = false;
-  }
-  if (!online) {
-    $("offline").classList.remove("hidden");
-    setStatus("off", hostOf(tab.url) + " · 服务未启动");
-  } else {
-    setStatus("on", hostOf(tab.url));
-    $("ver").textContent = "v" + serverInfo.version;
-  }
-
-  $("panel").onclick = () => openPanel(null);
-
-  const scanned = await scanPage(tab.id);
-  if (scanned.title) pageTitle = scanned.title;
-  const hits = merge([...(await captured(tab.id)), ...scanned.hits]);
-
-  if (!hits.length) {
-    $("list").innerHTML = '<div class="empty">' +
-      (scanned.dash
-        ? "这个页面不是 HLS。\n打开下载面板，让 yt-dlp 整页解析。"
-        : "还没看到视频流。\n先播放几秒，再点一次插件。") + "</div>";
-    if (scanned.dash) $("panel").classList.add("attn");
-    return;
-  }
-
-  if (!online) {
-    render(hits.map((h) => ({ ...h, profile: null })));
-    return;
-  }
-
-  render(hits.map((h) => ({ ...h, profile: null })));
-  $("count").textContent = "探测中…";
-
-  // 交给服务端数分片、拆档位：它知道怎么带 Referer 和 cookie
-  const cookies = await cookiesFor(tab.url);
-  const out = [];
-  for (const h of hits) {
-    try {
-      const r = await api("/v2/resolve", {
-        url: h.url, referer: h.referer || originOf(tab.url),
-        ua: navigator.userAgent, cookies,
-      }, 30000);
-      out.push({ ...h, profile: (r && r.profile) || null });
-    } catch (e) {
-      out.push({ ...h, profile: null });
-    }
-  }
-  out.sort((a, b) => ((b.profile && b.profile.segment_count) || -1) -
-                     ((a.profile && a.profile.segment_count) || -1));
-  render(out);
-}
-
 async function cookiesFor(url) {
   try {
     const list = await chrome.cookies.getAll({ url });
@@ -271,17 +210,19 @@ async function cookiesFor(url) {
   }
 }
 
-// 通过已登记的宿主程序拉起本地服务；插件自身没有启动进程的权限
-function startService() {
+// ------------------------------------------------------------ 本地服务开关
+// 扩展没有启动进程的权限，启动与停止都交给已登记的宿主程序
+
+function nativeCmd(cmd) {
   return new Promise((resolve) => {
     try {
-      chrome.runtime.sendNativeMessage(HOST, { cmd: "start" }, (res) => {
+      chrome.runtime.sendNativeMessage(HOST, { cmd }, (res) => {
         const err = chrome.runtime.lastError;
         if (err) {
           resolve({ ok: false, error: err.message });
           return;
         }
-        resolve({ ok: !!(res && res.ok), error: (res && res.error) || "" });
+        resolve(res || { ok: false, error: "没有返回" });
       });
     } catch (e) {
       resolve({ ok: false, error: String((e && e.message) || e) });
@@ -289,26 +230,212 @@ function startService() {
   });
 }
 
-async function onStartClick() {
-  const btn = $("startSvc");
-  const hint = $("offlineHint");
-  btn.disabled = true;
-  hint.textContent = "正在启动…";
-  const r = await startService();
-  if (r.ok) {
-    hint.textContent = "已启动，正在重连…";
-    setTimeout(() => init(), 900);
+function note(text) {
+  const el = $("note");
+  el.textContent = text || "";
+  el.classList.toggle("hidden", !text);
+}
+
+async function pingService(ms) {
+  try {
+    const r = await api("/v2/ping", null, ms || 3000);
+    serverInfo = r && r.ok ? r : null;
+  } catch (e) {
+    serverInfo = null;
+  }
+  online = !!serverInfo;
+  return online;
+}
+
+function paintService() {
+  const sw = $("svcSwitch");
+  sw.classList.toggle("on", online);
+  sw.classList.toggle("busy", busy);
+  sw.title = busy ? "处理中…" : online ? "点击关闭本地服务" : "点击启动本地服务";
+
+  $("offline").classList.toggle("hidden", online || busy);
+  if (!online && !busy) $("offlineText").textContent = "本地服务没开。点右上角开关启动。";
+
+  $("ver").textContent = online && serverInfo ? "v" + serverInfo.version : "";
+
+  if (!pageOk) {
+    setStatus(online ? "on" : "off", online ? "本地服务已启动" : "本地服务没开");
+  } else {
+    setStatus(online ? "on" : "off",
+              hostOf(tab.url) + (online ? "" : " · 服务未启动"));
+  }
+  syncWatch();
+}
+
+// 离线时每 2.5 秒探一次：无论是点开关还是去双击 server.bat，服务起来后页面自动接上
+function syncWatch() {
+  if (online || busy) {
+    if (watch) { clearInterval(watch); watch = null; }
     return;
   }
-  btn.disabled = false;
-  const msg = String(r.error || "");
-  if (/not found|not installed|找不到|Specified native/i.test(msg)) {
-    hint.textContent = "启动组件未安装：在项目目录双击 install_host.bat，然后重新加载扩展。";
-  } else {
-    hint.textContent = "启动失败：" + (msg || "未知错误");
+  if (watch) return;
+  watch = setInterval(async () => {
+    if (busy || refreshing || online) return;
+    if (await pingService(1500)) {
+      clearInterval(watch);
+      watch = null;
+      paintService();
+      await loadView();
+    }
+  }, 2500);
+}
+
+async function countActiveJobs() {
+  try {
+    const d = await api("/v2/jobs", null, 4000);
+    return ((d && d.jobs) || []).filter((j) => ACTIVE.has(j.state)).length;
+  } catch (e) {
+    return 0;
   }
 }
 
-$("startSvc").addEventListener("click", onStartClick);
+async function startFlow() {
+  busy = true;
+  confirmStopAt = 0;
+  note("");
+  $("offlineHint").textContent = "";
+  paintService();
+  $("offline").classList.remove("hidden");
+  $("offlineText").textContent = "正在启动本地服务…";
+
+  let hostError = null;
+  const host = nativeCmd("start");
+  host.then((r) => { if (!r.ok) hostError = r.error || "未知错误"; });
+
+  const end = Date.now() + 25000;
+  let up = false;
+  while (Date.now() < end) {
+    if (await pingService(1200)) { up = true; break; }
+    if (hostError) break;
+    await sleep(350);
+  }
+
+  busy = false;
+  $("svcSwitch").classList.remove("busy");
+  if (up) {
+    paintService();
+    await loadView();
+    return;
+  }
+
+  online = false;
+  paintService();
+  const msg = String(hostError || "");
+  $("offlineHint").textContent = msg
+    ? (/not found|not installed|Specified native|找不到/i.test(msg)
+        ? "启动组件未登记：在项目目录双击 install_host.bat，然后重新加载扩展。"
+        : "启动失败：" + msg)
+    : "25 秒内没有响应，查看项目下的 .tmp/server.log";
+}
+
+async function stopFlow() {
+  if (Date.now() > confirmStopAt) {
+    const n = await countActiveJobs();
+    if (n) {
+      confirmStopAt = Date.now() + 5000;
+      note("还有 " + n + " 个任务在进行，停止服务会中断它们。再点一次开关确认。");
+      return;
+    }
+  }
+  confirmStopAt = 0;
+  note("");
+  $("offlineHint").textContent = "";
+  busy = true;
+  paintService();
+
+  const r = await nativeCmd("stop");
+  busy = false;
+  $("svcSwitch").classList.remove("busy");
+
+  await refresh();
+  if (online) {
+    note("已发出停止，但服务仍在响应。稍后再点一次，或手动结束进程。");
+  } else if (!r.ok) {
+    note("停止失败：" + (r.error || "未知错误"));
+  }
+}
+
+// ------------------------------------------------------------ 页面列表
+
+async function loadView() {
+  if (refreshing || !pageOk || !tab) return;
+  refreshing = true;
+  try {
+    const scanned = await scanPage(tab.id);
+    if (scanned.title) pageTitle = scanned.title;
+    const hits = merge([...(await captured(tab.id)), ...scanned.hits]);
+
+    if (!hits.length) {
+      $("count").textContent = "";
+      $("list").innerHTML = '<div class="empty">' + (scanned.dash
+        ? "这个页面不是 HLS。\n打开下载面板，让 yt-dlp 整页解析。"
+        : "还没看到视频流。\n先播放几秒，再点一次插件。") + "</div>";
+      return;
+    }
+
+    render(hits.map((h) => ({ ...h, profile: null })));
+    if (!online) return;
+
+    $("count").textContent = "探测中…";
+    // 交给服务端数分片、拆档位：它知道怎么带 Referer 和 cookie
+    const cookies = await cookiesFor(tab.url);
+    const out = [];
+    for (const h of hits) {
+      try {
+        const r = await api("/v2/resolve", {
+          url: h.url, referer: h.referer || originOf(tab.url),
+          ua: navigator.userAgent, cookies,
+        }, 30000);
+        out.push({ ...h, profile: (r && r.profile) || null });
+      } catch (e) {
+        out.push({ ...h, profile: null });
+      }
+    }
+    out.sort((a, b) => ((b.profile && b.profile.segment_count) || -1) -
+                       ((a.profile && a.profile.segment_count) || -1));
+    render(out);
+  } finally {
+    refreshing = false;
+  }
+}
+
+async function refresh() {
+  await pingService();
+  paintService();
+  await loadView();
+}
+
+async function init() {
+  const [t] = await chrome.tabs.query({ active: true, currentWindow: true });
+  tab = t;
+  $("panel").onclick = () => openPanel(null);
+
+  if (!tab || !tab.url) {
+    $("list").innerHTML = '<div class="empty">拿不到当前标签页</div>';
+    await refresh();
+    return;
+  }
+  pageTitle = tab.title || "";
+
+  if (!/^https?:/i.test(tab.url)) {
+    $("list").innerHTML = '<div class="empty">换一个有视频的网页再点插件</div>';
+    await refresh();
+    return;
+  }
+
+  pageOk = true;
+  await refresh();
+}
+
+$("svcSwitch").addEventListener("click", async () => {
+  if (busy || refreshing) return;
+  if (online) await stopFlow();
+  else await startFlow();
+});
 
 init().catch((e) => setStatus("off", "出错了：" + String((e && e.message) || e)));
