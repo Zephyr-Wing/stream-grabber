@@ -1,4 +1,5 @@
 const API = "http://127.0.0.1:8765";
+const HOST = "com.streamgrabber.host";
 const $ = (id) => document.getElementById(id);
 
 let pending = null;      // popup 传来的候选
@@ -52,10 +53,12 @@ async function init() {
   let info = null;
   try { info = await api("/v2/ping"); } catch (e) {}
   if (!info || !info.ok) {
-    $("status").textContent = "本地服务未连接。运行 server.bat 后刷新本页。";
+    $("status").textContent = "本地服务未连接";
+    $("svcBar").classList.remove("hidden");
     $("start").disabled = true;
     return;
   }
+  $("svcBar").classList.add("hidden");
   $("status").textContent = "服务已连接 · v" + info.version + " · 保存到 " + info.out_dir;
 
   settings = (await api("/v2/settings")).settings;
@@ -373,5 +376,56 @@ function pickDir() {
   if (p) $(dirTarget).value = p;
   $("modal").classList.remove("on");
 }
+
+// ------------------------------------------------------------ 本地服务控制
+// 扩展没有启动进程的权限，这里通过已登记的宿主程序代劳
+
+function nativeCmd(cmd) {
+  return new Promise((resolve) => {
+    try {
+      chrome.runtime.sendNativeMessage(HOST, { cmd }, (res) => {
+        const err = chrome.runtime.lastError;
+        if (err) {
+          resolve({ ok: false, error: err.message });
+          return;
+        }
+        resolve(res || { ok: false, error: "没有返回" });
+      });
+    } catch (e) {
+      resolve({ ok: false, error: String((e && e.message) || e) });
+    }
+  });
+}
+
+async function svcStart() {
+  const btn = $("svcStart");
+  btn.disabled = true;
+  $("svcHint").textContent = "正在启动…";
+  const r = await nativeCmd("start");
+  if (r.ok) {
+    $("svcHint").textContent = "已启动，正在重连…";
+    setTimeout(() => location.reload(), 900);
+    return;
+  }
+  btn.disabled = false;
+  const msg = String(r.error || "");
+  $("svcHint").textContent = /not found|not installed|Specified native/i.test(msg)
+    ? "启动组件未安装：在项目目录双击 install_host.bat，然后重新加载扩展。"
+    : "启动失败：" + (msg || "未知错误");
+}
+
+async function svcStop() {
+  const r = await nativeCmd("stop");
+  if (r.ok) {
+    $("status").textContent = "本地服务已停止";
+    $("svcBar").classList.remove("hidden");
+    $("start").disabled = true;
+  } else {
+    $("status").textContent = "停止失败：" + (r.error || "未知错误");
+  }
+}
+
+$("svcStart").onclick = svcStart;
+$("svcStop").onclick = svcStop;
 
 init().catch((e) => { $("status").textContent = "出错了：" + String(e.message || e); });

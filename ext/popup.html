@@ -36,6 +36,11 @@
   .main span { display: block; color: #6b7a90; font-size: 10.5px; margin-top: 2px; }
   .empty { border: 1px dashed #ddd; border-radius: 6px; color: #999; padding: 14px 10px;
            text-align: center; font-size: 11px; line-height: 1.7; white-space: pre-line; }
+  #startSvc { margin-top: 7px; padding: 6px 12px; border: 1px solid #e0b4ae; border-radius: 6px;
+              background: #fff; color: #a03030; font-size: 11.5px; }
+  #startSvc:hover { background: #fff6f5; }
+  #startSvc[disabled] { opacity: .55; cursor: default; }
+  #offlineHint { margin-top: 6px; color: #9a6a66; font-size: 10.5px; line-height: 1.6; }
 </style>
 </head>
 <body>
@@ -47,7 +52,9 @@
   </div>
 
   <div class="tip hidden" id="offline">
-    本地服务没开。运行仓库里的 <b>server.bat</b>，窗口留着别关。
+    <div id="offlineText">本地服务没开。</div>
+    <button id="startSvc">启动本地服务</button>
+    <div id="offlineHint"></div>
   </div>
 
   <div class="sec"><span>页面上抓到的流</span><span id="count"></span></div>

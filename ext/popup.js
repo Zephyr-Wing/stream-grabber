@@ -1,4 +1,5 @@
 const API = "http://127.0.0.1:8765";
+const HOST = "com.streamgrabber.host";
 const $ = (id) => document.getElementById(id);
 
 let tab = null;
@@ -219,7 +220,7 @@ async function init() {
     $("ver").textContent = "v" + serverInfo.version;
   }
 
-  $("panel").addEventListener("click", () => openPanel(null));
+  $("panel").onclick = () => openPanel(null);
 
   const scanned = await scanPage(tab.id);
   if (scanned.title) pageTitle = scanned.title;
@@ -269,5 +270,45 @@ async function cookiesFor(url) {
     return [];
   }
 }
+
+// 通过已登记的宿主程序拉起本地服务；插件自身没有启动进程的权限
+function startService() {
+  return new Promise((resolve) => {
+    try {
+      chrome.runtime.sendNativeMessage(HOST, { cmd: "start" }, (res) => {
+        const err = chrome.runtime.lastError;
+        if (err) {
+          resolve({ ok: false, error: err.message });
+          return;
+        }
+        resolve({ ok: !!(res && res.ok), error: (res && res.error) || "" });
+      });
+    } catch (e) {
+      resolve({ ok: false, error: String((e && e.message) || e) });
+    }
+  });
+}
+
+async function onStartClick() {
+  const btn = $("startSvc");
+  const hint = $("offlineHint");
+  btn.disabled = true;
+  hint.textContent = "正在启动…";
+  const r = await startService();
+  if (r.ok) {
+    hint.textContent = "已启动，正在重连…";
+    setTimeout(() => init(), 900);
+    return;
+  }
+  btn.disabled = false;
+  const msg = String(r.error || "");
+  if (/not found|not installed|找不到|Specified native/i.test(msg)) {
+    hint.textContent = "启动组件未安装：在项目目录双击 install_host.bat，然后重新加载扩展。";
+  } else {
+    hint.textContent = "启动失败：" + (msg || "未知错误");
+  }
+}
+
+$("startSvc").addEventListener("click", onStartClick);
 
 init().catch((e) => setStatus("off", "出错了：" + String((e && e.message) || e)));

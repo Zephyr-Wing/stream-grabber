@@ -5,12 +5,35 @@
     python -m app --port 8765
 """
 import argparse
+import atexit
 import json
 import os
 import sys
 import urllib.request
 
 from . import api, config, jobs
+
+PID_FILE = os.path.join(config.ROOT, ".tmp", "server.pid")
+
+
+def _write_pid():
+    """记录进程号，供扩展的「停止服务」与宿主脚本使用。"""
+    try:
+        os.makedirs(os.path.dirname(PID_FILE), exist_ok=True)
+        with open(PID_FILE, "w", encoding="utf-8") as f:
+            f.write(str(os.getpid()))
+        atexit.register(_drop_pid)
+    except OSError:
+        pass
+
+
+def _drop_pid():
+    try:
+        with open(PID_FILE, encoding="utf-8") as f:
+            if f.read().strip() == str(os.getpid()):
+                os.remove(PID_FILE)
+    except Exception:
+        pass
 
 
 def _already_running(port):
@@ -41,6 +64,7 @@ def main():
 
     yt, ff = jobs.start(cfg)
     httpd, port = api.serve(cfg, yt, ff, port)
+    _write_pid()
 
     print("=" * 58)
     print(" stream-grabber 本地服务")

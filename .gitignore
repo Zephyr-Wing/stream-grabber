@@ -7,6 +7,9 @@ config.json
 # 本地测试流（由 tests/make_mocks.py 生成）
 mocks/
 
+# 宿主清单（含本机绝对路径与扩展 ID，由 install_host.bat 生成）
+native-host/
+
 # 旧版残留的专用浏览器配置（含登录态，绝不入库）
 .chrome-profile/
 .sniff_profile/
